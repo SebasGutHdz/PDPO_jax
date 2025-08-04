@@ -123,3 +123,58 @@ pdpo_jax/
     ├── compare_pytorch.py
     ├── performance_tests.py
     └── generative_benchmarks.py   #  Benchmark generative models
+
+
+
+Updated Implementation Order
+Phase 0: Generative Model Foundation (Week 0.5)
+
+generative/models/base.py - Base interface for generative models
+generative/optimization/objectives.py - Objective functions
+generative/models/flow_matching.py - Flow matching implementation
+generative/models/stochastic_interpolants.py - SI implementation
+
+Phase 1: Foundation (Week 1)
+
+core/types.py - Define all type annotations and data structures
+core/config.py - Configuration management system
+utils/jax_utils.py - JAX utilities (pytree manipulation, etc.)
+models/base.py - Abstract interfaces
+utils/parameter_store.py - Parameter storage system for pre-trained models
+
+Phase 2: Core Components (Week 2)
+
+models/mlp.py - MLP implementation with nnx
+spline/interpolation.py - Cubic spline functions
+ode/solvers.py - Basic ODE solvers
+models/neural_ode.py - Neural ODE integration
+
+Phase 3: Generative Training (Week 2.5)
+
+generative/optimization/losses.py - Loss functions for FM/SI
+generative/training/trainer.py - Generative model trainer
+generative/data/loaders.py - Data loading utilities
+optimization/initialization.py - Integration with PDPO
+
+Phase 4: Spline System (Week 3)
+
+spline/spline.py - Main Spline class
+ode/augmented_ode.py - Entropy/score tracking
+potentials/base.py - Potential interface
+potentials/obstacles.py - Obstacle implementations
+
+Phase 5: Optimization (Week 4)
+
+optimization/loss_functions.py - Loss computations
+optimization/path_optimizer.py - Path optimization
+optimization/coupling_optimizer.py - Coupling optimization
+training/trainer.py - Main training loop
+training/pipeline.py - Full pipeline orchestration
+
+Phase 6: Utilities & Polish (Week 5)
+
+data/datasets.py - Data generation
+visualization/plotting.py - Visualization tools
+utils/checkpointing.py - Model I/O
+scripts/pretrain_boundaries.py - Pre-training script
+scripts/train.py - Training script
