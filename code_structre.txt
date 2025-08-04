@@ -1,0 +1,125 @@
+pdpo_jax/
+├── README.md
+├── setup.py
+├── requirements.txt
+├── pyproject.toml
+├── .gitignore
+├── tests/
+│   ├── __init__.py
+│   ├── test_models.py
+│   ├── test_spline.py
+│   ├── test_potentials.py
+│   ├── test_ode_solvers.py
+│   ├── test_optimization.py
+│   ├── test_generative/
+│   │   ├── __init__.py
+│   │   ├── test_flow_matching.py
+│   │   └── test_stochastic_interpolants.py
+├── configs/
+│   ├── base_config.yaml
+│   ├── experiment_configs/
+│   │   ├── gaussian_2d.yaml
+│   │   ├── obstacle_avoidance.yaml
+│   │   └── opinion_dynamics.yaml
+│   ├── generative_configs/
+│   │   ├── flow_matching.yaml
+│   │   └── stochastic_interpolants.yaml
+│   └── config_schema.py
+├── pdpo_jax/
+│   ├── __init__.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── types.py          # Type definitions, NamedTuples, custom types
+│   │   ├── config.py         # Configuration management with validation
+│   │   └── registry.py       # Registry pattern for potentials, activations, etc.
+│   ├── generative/           #  Generative models for boundary initialization
+│   │   ├── __init__.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py             # Base generative model interface
+│   │   │   ├── flow_matching.py    # Flow matching implementation
+│   │   │   └── stochastic_interpolants.py  # SI implementation
+│   │   ├── optimization/
+│   │   │   ├── __init__.py
+│   │   │   ├── objectives.py       # FM/SI objective functions
+│   │   │   ├── samplers.py         # Path sampling strategies
+│   │   │   └── losses.py           # Loss functions for generative models
+│   │   ├── data/
+│   │   │   ├── __init__.py
+│   │   │   ├── loaders.py          # Data loading for pre-training
+│   │   │   └── augmentation.py     # Data augmentation strategies
+│   │   ├── training/
+│   │   │   ├── __init__.py
+│   │   │   ├── trainer.py          # Generative model trainer
+│   │   │   ├── callbacks.py        # Training callbacks
+│   │   │   └── evaluation.py       # Model evaluation metrics
+│   │   └── visualization/
+│   │       ├── __init__.py
+│   │       └── diagnostics.py      # Training diagnostics plots
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── base.py           # Abstract base classes
+│   │   ├── mlp.py            # MLP implementation using nnx
+│   │   ├── neural_ode.py     # Neural ODE wrapper
+│   │   └── model_utils.py    # Parameter manipulation utilities
+│   ├── spline/
+│   │   ├── __init__.py
+│   │   ├── interpolation.py  # Cubic Hermite spline functions
+│   │   ├── spline.py         # Main Spline class
+│   │   └── path_utils.py     # Path-related utilities
+│   ├── ode/
+│   │   ├── __init__.py
+│   │   ├── solvers.py        # ODE solvers (Euler, Midpoint, etc.)
+│   │   ├── augmented_ode.py  # ODEs for entropy/score tracking
+│   │   └── integration.py    # Integration utilities
+│   ├── potentials/
+│   │   ├── __init__.py
+│   │   ├── base.py           # Base potential interface
+│   │   ├── obstacles.py      # Obstacle potentials
+│   │   ├── interactions.py   # Mean-field interactions
+│   │   ├── information.py    # Entropy, Fisher information
+│   │   └── composite.py      # Composite potential handling
+│   ├── optimization/
+│   │   ├── __init__.py
+│   │   ├── path_optimizer.py     # Path optimization logic
+│   │   ├── coupling_optimizer.py # Coupling optimization logic
+│   │   ├── loss_functions.py     # Loss computations
+│   │   ├── schedulers.py         # Learning rate schedulers
+│   │   └── initialization.py     #  Initialization strategies using generative models
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── datasets.py       # Toy datasets
+│   │   ├── distributions.py  # Distribution utilities
+│   │   └── samplers.py       # Sampling utilities
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── jax_utils.py      # JAX-specific utilities
+│   │   ├── metrics.py        # Wasserstein distance, etc.
+│   │   ├── logging.py        # Logging utilities
+│   │   ├── checkpointing.py  # Model saving/loading
+│   │   └── parameter_store.py #  Parameter storage/retrieval system
+│   ├── visualization/
+│   │   ├── __init__.py
+│   │   ├── plotting.py       # Main plotting functions
+│   │   ├── animations.py     # Animation utilities
+│   │   └── analysis.py       # Result analysis tools
+│   └── training/
+│       ├── __init__.py
+│       ├── trainer.py        # Main PDPO training loop
+│       ├── callbacks.py      # Training callbacks
+│       ├── experiment.py     # Experiment runner
+│       └── pipeline.py       # Full pipeline including pre-training
+├── scripts/
+│   ├── pretrain_boundaries.py  # NEW: Pre-train boundary parameters
+│   ├── train.py                # Main training script
+│   ├── evaluate.py             # Evaluation script
+│   └── visualize.py            # Visualization script
+├── notebooks/
+│   ├── tutorial_basic.ipynb
+│   ├── tutorial_advanced.ipynb
+│   ├── tutorial_generative.ipynb  #  Generative model tutorial
+│   └── experiment_analysis.ipynb
+└── benchmarks/
+    ├── compare_pytorch.py
+    ├── performance_tests.py
+    └── generative_benchmarks.py   #  Benchmark generative models
