@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array,Float,PyTree
 
-from pdpo_jax.core.types import (
+from pdpo.core.types import (
     ModelParams,
     ModelState,
     TimeArray,
