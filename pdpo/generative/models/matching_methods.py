@@ -1,180 +1,392 @@
 """
-This file contains the MatchingMethods abstract class and the particular FM, CFM, and SI matching methods
+MatchingMethod: Abstract base class for generative models used in PDPO boundary initialization.
 """
 
-from abc import ABC,abstractmethod
-from typing import Callable,Dict,Any,Optional
+from abc import ABC, abstractmethod
+from typing import Optional, Tuple, Dict, Any, Callable
 import jax
 import jax.numpy as jnp
-import jax.random as jrn
-from jaxtyping import Array,Float,PRNGKeyArray
 from flax import nnx
+from jaxtyping import Array, Float, PyTree
 
-from base import GenerativeModel
-from pdpo.core.types import(
+from pdpo.core.types import (
+    ModelParams,
+    ModelState,
+    PRNGKeyArray,
     SampleArray,
-    TimeArray, 
-    VelocityArray,
-    TrajectoryArray,
-    ObjectiveFunction
+    TimeArray
 )
+from pdpo.generative.optimization import objectives
+from pdpo.ode import solvers
+from pdpo.ode.solvers import ODESolver
 
 
-class MatchingMethod(GenerativeModel):
-    """Abstract base class for training NODEs using Matching Methods"""
-
+class MatchingMethod(ABC):
+    """
+    Abstract base class for generative models used in PDPO boundary initialization.
+    
+    Subclasses: FlowMatching, ConditionalFlowMatching, StochasticInterpolant
+    """
+    
     def __init__(
-            self,
-            vf_model: nnx.Module,
-            dim: int = 2,
-            time_varying: bool = True,
-            solver_config: Dict = {"type": 'midpoint', 'num_steps': 100}
+        self,
+        method_name: str,
+        vf_model: nnx.Module,
+        optimizer: nnx.Optimizer,
+        ode_solver: ODESolver,
+        scheduler: Optional[Callable] = None
     ):
         """
-        Define MatchingMethod
-
-        Args: 
-            vf_model: Initialized velocity field
-            dim: Spatial dimension of the problem
-            time_varying: Whethere the vf is time dependent or not. 
-        """
-
-        if not isinstance(vf_model, nnx.Module):
-            raise ValueError(f"The velocity field has to be an nnx.Module")
-        else:
-            self.vf_model = vf_model
-            self.dim = dim
-            self.time_varying = time_varying
-            self.solver_config =  solver_config
-
-        # Trainig state
-        self.is_trained = False
-        self.training_metrics = []
-
-    def __call__(
-        self, 
-        t: TimeArray, 
-        x: SampleArray
-    ) -> VelocityArray:
-        """Evaluate velocity field v_{theta}(t,x).
+        Initialize the matching method.
         
         Args:
-            t: Time points [batch_size] or [batch_size, 1]
-            x: Spatial coordinates [batch_size, dim]
-            
-        Returns:
-            Velocity field values [batch_size, dim]
+            method_name: Method identifier ("fm", "cfm", "si")
+            vf_model: Velocity field neural network (nnx.Module)
+            optimizer: JAX optimizer for training
+            scheduler: Optional learning rate scheduler
         """
-        self._validate_inputs(t, x)
+        assert method_name in ["fm", "cfm", "si"], f"Invalid method_name: {method_name}"
         
-        # Ensure t has correct shape
-        if t.ndim == 1:
-            t = t.reshape(-1, 1)
-        elif t.ndim != 2:
-            raise ValueError("The time variable does not have the right shape, it should be: (bs,) or (bs,1)")
+        self.method_name = method_name
+        self.vf_model = vf_model
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.ode_solver = ode_solver
         
-        # Call the velocity field model
-        if self.time_varying:
-            return self.vf_model(t, x)
+    def __repr__(self) -> str:
+        """String representation showing method and model architecture."""
+        model_cls = type(self.vf_model).__name__
+        
+        if hasattr(self.vf_model, 'layers'):
+            n_layers = len(self.vf_model.layers)
+            model_repr = f"{model_cls} with {n_layers} layers"
         else:
-            return self.vf_model(x)
+            model_repr = model_cls
+
+        return f"{self.__class__.__name__}(method='{self.method_name}', model={model_repr})"
     
-    def _ode_func(self, t: float, x: SampleArray) -> VelocityArray:
-        """ODE right-hand side function for integration.
-        
-        Args:
-            t: Scalar time point
-            x: Current state [batch_size, dim]
-            
-        Returns:
-            Velocity at v(t,\vec{x}) current state [batch_size, dim]
-        """
-        # Convert scalar time to batch
-        t_batch = jnp.full((x.shape[0],), t)
-        return self(t_batch, x)
-    
-    def sample(
+    @abstractmethod
+    def compute_loss(
         self,
+        params: ModelParams,
         key: PRNGKeyArray,
-        num_samples: int,
-        prior_samples: Optional[SampleArray] = None
-    ) -> SampleArray:
-        """Sample from the learned distribution.
+        data_batch: SampleArray,
+        x1: Optional[SampleArray] = None,
+        model_state: Optional[ModelState] = None
+    ) -> Tuple[Float[Array, ""], Dict[str, Any], ModelState]:
+        """
+        Compute training loss using objectives from generative/optimization/objectives.py
         
         Args:
-            key: Random key for sampling
-            num_samples: Number of samples to generate
-            prior_samples: Optional prior samples (default: standard normal)
+            params: Model parameters
+            key: JAX random key
+            data_batch: Target samples (ρ₁)
+            x1: Optional source samples (ρ₀). If None, use Gaussian
+            model_state: Optional model state
             
         Returns:
-            Generated samples at t=1 [num_samples, dim]
+            loss: Scalar loss value
+            metrics: Dictionary of training metrics
+            new_model_state: Updated model state
         """
-        if not self.is_trained:
-            raise RuntimeError("Model must be trained before sampling")
-        
-        # Sample from prior if not provided
-        if prior_samples is None:
-            prior_samples = jax.random.normal(key, (num_samples, self.dim))
-        
-        # Integration using configured solver
-        num_steps = self.solver_config["num_steps"]
-        dt = 1.0 / num_steps
-        x = prior_samples
-        
-        # Simple Euler integration (can be extended for other solvers)
-        for i in range(num_steps):
-            t = i / num_steps
-            v = self._ode_func(t, x)
-            x = x + dt * v
-        
-        return x
+        pass
+    
     
     def sample_trajectory(
         self,
-        key: PRNGKeyArray,
-        num_samples: int,
-        prior_samples: Optional[SampleArray] = None,
-        save_every: int = 1
-    ) -> TrajectoryArray:
-        """Sample complete trajectories from t=0 to t=1.
+        x0: SampleArray,
+        n_steps: int = 10,
+        model_state: Optional[ModelState] = None
+    ) -> Tuple[SampleArray, ModelState]:
+        """
+        Generate sample trajectories by integrating the velocity field.
+        
+        Uses fixed step size ODE integration from /ode/solvers.py
         
         Args:
-            key: Random key for sampling
-            num_samples: Number of samples
-            prior_samples: Optional prior samples
-            save_every: Save trajectory every N steps
+            params: Model parameters
+            key: JAX random key
+            n_samples: Number of samples to generate
+            n_steps: Number of integration steps (default: 10)
+            x0: Optional initial samples. If None, sample from reference distribution
+            model_state: Optional model state
             
         Returns:
-            Complete trajectories [num_samples, num_saved_steps, dim]
+            samples: Final samples at t=1, shape (n_samples, dim)
+            new_model_state: Updated model state
         """
-        if not self.is_trained:
-            raise RuntimeError("Model must be trained before sampling")
-        
-        if prior_samples is None:
-            prior_samples = jax.random.normal(key, (num_samples, self.dim))
-        
-        num_steps = self.solver_config["num_steps"]
-        num_saved = (num_steps // save_every) + 1
-        
-        # Initialize trajectory storage
-        trajectory = jnp.zeros((num_samples, num_saved, self.dim))
-        trajectory = trajectory.at[:, 0, :].set(prior_samples)
-        
-        # Integration with trajectory saving
-        dt = 1.0 / num_steps
-        x = prior_samples
-        save_idx = 1
-        
-        for i in range(num_steps):
-            t = i / num_steps
-            v = self._ode_func(t, x)
-            x = x + dt * v
-            
-            # Save trajectory point if needed
-            if (i + 1) % save_every == 0 and save_idx < num_saved:
-                trajectory = trajectory.at[:, save_idx, :].set(x)
-                save_idx += 1
-        
-        return trajectory
+        dt = 1/n_steps
+        t = jnp.linspace(0,1,n_steps)
+        x1 = self.ode_solver(self.vf_model,t[0],x0,dt)
+        for i in range(1,n_steps):
+            x1 = self.ode_solver(self.vf_model,t[i],x1,dt)
+        return x1
     
+    def training_step(
+        self,
+        params: ModelParams,
+        key: PRNGKeyArray,
+        data_batch: SampleArray,
+        x1: Optional[SampleArray] = None,
+        model_state: Optional[ModelState] = None
+    ) -> Tuple[Float[Array, ""], Dict[str, Any], ModelParams, ModelState]:
+        """
+        Execute one training step.
+        
+        Args:
+            params: Current model parameters
+            key: JAX random key
+            data_batch: Batch of target data
+            x1: Optional source data for ρ₀ → ρ₁ training
+            model_state: Optional model state
+            
+        Returns:
+            loss: Scalar loss value
+            metrics: Dictionary of training metrics
+            updated_params: Updated model parameters
+            updated_state: Updated model state
+        """
+        def loss_fn(params):
+            return self.compute_loss(params, key, data_batch, x1, model_state)
+        
+        # Compute loss and gradients
+        (loss, metrics, new_model_state), grads = jax.value_and_grad(
+            loss_fn, has_aux=True
+        )(params)
+        
+        # Update parameters
+        updates, new_opt_state = self.optimizer.update(grads, self.optimizer.state)
+        new_params = nnx.apply_updates(params, updates)
+        
+        # Update learning rate if scheduler provided
+        if self.scheduler is not None:
+            new_lr = self.scheduler(self.optimizer.state.step)
+            metrics['learning_rate'] = new_lr
+            
+        return loss, metrics, new_params, new_model_state
+    
+    def train(
+        self,
+        params: ModelParams,
+        key: PRNGKeyArray,
+        target_data: SampleArray,
+        num_epochs: int,
+        batch_size: int,
+        source_data: Optional[SampleArray] = None,
+        model_state: Optional[ModelState] = None,
+        eval_frequency: int = 100
+    ) -> Tuple[ModelParams, ModelState, Dict[str, Any]]:
+        """
+        Train the generative model.
+        
+        Args:
+            params: Initial model parameters
+            key: JAX random key
+            target_data: Target distribution samples (ρ₁)
+            num_epochs: Number of training epochs
+            batch_size: Batch size for training
+            source_data: Optional source distribution samples (ρ₀)
+            model_state: Initial model state
+            eval_frequency: How often to log training progress
+            
+        Returns:
+            final_params: Trained model parameters
+            final_state: Final model state
+            training_history: Dictionary of training metrics over time
+        """
+        history = {'train_loss': [], 'epochs': []}
+        current_params = params
+        current_state = model_state
+        
+        num_batches = len(target_data) // batch_size
+        
+        for epoch in range(num_epochs):
+            epoch_key = jax.random.fold_in(key, epoch)
+            epoch_loss = 0.0
+            
+            # Shuffle data
+            perm = jax.random.permutation(epoch_key, len(target_data))
+            shuffled_target = target_data[perm]
+            shuffled_source = source_data[perm] if source_data is not None else None
+            
+            for batch_idx in range(num_batches):
+                batch_key = jax.random.fold_in(epoch_key, batch_idx)
+                
+                # Get batch
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, len(target_data))
+                target_batch = shuffled_target[start_idx:end_idx]
+                source_batch = shuffled_source[start_idx:end_idx] if shuffled_source is not None else None
+                
+                # Training step
+                loss, metrics, current_params, current_state = self.training_step(
+                    current_params, batch_key, target_batch, source_batch, current_state
+                )
+                
+                epoch_loss += loss
+                
+            # Record training metrics
+            avg_loss = epoch_loss / num_batches
+            
+            if epoch % eval_frequency == 0:
+                history['train_loss'].append(float(avg_loss))
+                history['epochs'].append(epoch)
+                print(f"Epoch {epoch}: Loss = {avg_loss:.4f}")
+                
+        return current_params, current_state, history
+    
+    
+    
+   
+    
+class FlowMatching(MatchingMethod):
+    """
+    Flow Matching implementation for generative modeling.
+    
+    Implements the standard Flow Matching objective:
+    L = E[||v_θ(t, x_t) - u_t||²]
+    where x_t = (1-t)x_0 + t*x_1 and u_t = x_1 - x_0
+    """
+    
+    def __init__(
+        self,
+        vf_model: nnx.Module,
+        optimizer: nnx.Optimizer,
+        scheduler: Optional[Callable] = None
+    ):
+        """
+        Initialize Flow Matching method.
+        
+        Args:
+            vf_model: Velocity field neural network (nnx.Module)
+            optimizer: JAX optimizer for training
+            scheduler: Optional learning rate scheduler
+        """
+        super().__init__(
+            method_name="fm",
+            vf_model=vf_model,
+            optimizer=optimizer,
+            scheduler=scheduler
+        )
+    
+    def compute_loss(
+        self,
+        params: ModelParams,
+        key: PRNGKeyArray,
+        data_batch: SampleArray,
+        x1: Optional[SampleArray] = None,
+        model_state: Optional[ModelState] = None
+    ) -> Tuple[Float[Array, ""], Dict[str, Any], ModelState]:
+        """
+        Compute Flow Matching loss using existing objective.
+        
+        Args:
+            params: Model parameters
+            key: JAX random key
+            data_batch: Target samples (ρ₁)
+            x1: Optional source samples (ρ₀). If None, use Gaussian
+            model_state: Optional model state
+            
+        Returns:
+            loss: Scalar loss value
+            metrics: Dictionary of training metrics
+            new_model_state: Updated model state
+        """
+        # Use existing flow_matching_loss from objectives.py
+        # Adapt to the actual API in your objectives module
+        loss, metrics, new_model_state = objectives.flow_matching_loss(
+            model=self.vf_model,
+            params=params,
+            key=key,
+            x1=data_batch,  # Target samples
+            x0=x1,  # Source samples (None for Gaussian)
+            model_state=model_state
+        )
+        
+        return loss, metrics, new_model_state
+    
+    def sample_trajectory(
+        self,
+        params: ModelParams,
+        key: PRNGKeyArray,
+        n_samples: int,
+        n_steps: int = 10,
+        x0: Optional[SampleArray] = None,
+        model_state: Optional[ModelState] = None
+    ) -> Tuple[SampleArray, ModelState]:
+        """
+        Generate samples by integrating the velocity field ODE.
+        
+        Integrates dx/dt = v_θ(t, x) from t=0 to t=1 using fixed step size.
+        
+        Args:
+            params: Model parameters
+            key: JAX random key
+            n_samples: Number of samples to generate
+            n_steps: Number of integration steps
+            x0: Optional initial samples. If None, sample from N(0,I)
+            model_state: Optional model state
+            
+        Returns:
+            samples: Final samples at t=1, shape (n_samples, dim)
+            new_model_state: Updated model state
+        """
+        # Initialize samples
+        if x0 is not None:
+            x = x0.copy()
+            dim = x0.shape[-1]
+        else:
+            # Default to 2D for now - in practice, infer from model or pass as parameter
+            dim = 2
+            x = jax.random.normal(key, (n_samples, dim))
+        
+        # Time integration parameters
+        dt = 1.0 / n_steps
+        current_model_state = model_state
+        
+        # Integrate using fixed step size Euler method
+        for step in range(n_steps):
+            t = step * dt
+            
+            # Compute velocity: dx/dt = v_θ(t, x)
+            velocity, current_model_state = self._velocity_field(
+                params, t, x, current_model_state
+            )
+            
+            # Euler step: x_{t+dt} = x_t + dt * v_θ(t, x_t)
+            x = x + dt * velocity
+        
+        return x, current_model_state
+    
+    def _velocity_field(
+        self,
+        params: ModelParams,
+        t: float,
+        x: SampleArray,
+        model_state: Optional[ModelState] = None
+    ) -> Tuple[SampleArray, ModelState]:
+        """
+        Compute velocity field v_θ(t, x) using the neural network.
+        
+        Args:
+            params: Model parameters
+            t: Time value (scalar)
+            x: Position samples, shape (batch_size, dim)
+            model_state: Optional model state
+            
+        Returns:
+            velocity: Velocity field v_θ(t, x), shape (batch_size, dim)
+            new_model_state: Updated model state
+        """
+        batch_size = x.shape[0]
+        
+        # Time conditioning - broadcast time to match batch dimension
+        t_expanded = jnp.full((batch_size, 1), t)
+        
+        # Concatenate position and time: input = [x, t]
+        model_input = jnp.concatenate([x, t_expanded], axis=-1)
+        
+        # Forward pass through the velocity field network
+        velocity = self.vf_model(model_input)
 
+        return velocity,model_state
