@@ -210,8 +210,116 @@ class ConditionalFlowMatchingObjective(FlowMatchingObjective):
             
         return x_t, u_t
     
+class StochasticInterpolantsObjective(ObjectiveFunction):
+    """Stochastic Interpolants objective for generalized transport."""
+    
+    def __init__(
+        self,
+        model_fn: Callable,
+        alpha_fn: Callable[[TimeArray], TimeArray] = lambda t: 1 - t,
+        beta_fn: Callable[[TimeArray], TimeArray] = lambda t: t,
+        gamma_fn: Callable[[TimeArray], TimeArray] = lambda t: jnp.sqrt(t * (1 - t))
+    ):
+        """Initialize SI objective.
+        
+        Args:
+            model_fn: Model function
+            alpha_fn: Coefficient for x_0 in interpolant
+            beta_fn: Coefficient for x_1 in interpolant  
+            gamma_fn: Coefficient for noise in interpolant
+        """
+        self.model_fn = model_fn
+        self.alpha_fn = alpha_fn
+        self.beta_fn = beta_fn
+        self.gamma_fn = gamma_fn
+    
+    def compute_interpolant(
+        self,
+        t: TimeArray,
+        x0: SampleArray,
+        x1: SampleArray,
+        noise: SampleArray
+    ) -> Tuple[SampleArray, VelocityArray]:
+        """Compute stochastic interpolant and target velocity."""
+        t = t.reshape(-1, 1)
+        
+        alpha_t = self.alpha_fn(t)
+        beta_t = self.beta_fn(t)
+        gamma_t = self.gamma_fn(t)
+        
+        # Interpolant: I_t = α(t)x_0 + β(t)x_1 + γ(t)ε
+        x_t = alpha_t * x0 + beta_t * x1 + gamma_t * noise
+        
+        # Target velocity (time derivative)
+        # For simple case: u_t = α'(t)x_0 + β'(t)x_1 + γ'(t)ε
+        # Using finite differences for derivatives (can be replaced with exact)
+        dt = 1e-4
+        alpha_prime = (self.alpha_fn(t + dt) - self.alpha_fn(t - dt)) / (2 * dt)
+        beta_prime = (self.beta_fn(t + dt) - self.beta_fn(t - dt)) / (2 * dt)
+        gamma_prime = (self.gamma_fn(t + dt) - self.gamma_fn(t - dt)) / (2 * dt)
+        
+        u_t = alpha_prime * x0 + beta_prime * x1 + gamma_prime * noise
+        
+        return x_t, u_t
+    
+    def compute_loss(
+        self,
+        params: ModelParams,
+        key: PRNGKeyArray,
+        data_batch: SampleArray,
+        prior_samples: Optional[SampleArray] = None,
+        **kwargs
+    ) -> Tuple[Float[Array, ""], Dict[str, Any]]:
+        """Compute SI loss."""
+        batch_size, dim = data_batch.shape
+        
+        # Sample components
+        if prior_samples is None:
+            key_prior, key = jax.random.split(key)
+            prior_samples = jax.random.normal(key_prior, (batch_size, dim))
+        
+        key_time, key_noise, key = jax.random.split(key, 3)
+        t = jax.random.uniform(key_time, (batch_size,), minval=1e-4, maxval=1.0)
+        noise = jax.random.normal(key_noise, (batch_size, dim))
+        
+        # Compute interpolant and target
+        x_t, u_t = self.compute_interpolant(t, prior_samples, data_batch, noise)
+        
+        # Predict velocity
+        v_pred = self.model_fn(params, t, x_t)
+
+        l2_error = jnp.linalg.norm(v_pred-u_t,axis = -1)**2
+        
+        # Compute loss
+        loss = jnp.mean(l2_error)
+        
+        metrics = {
+            "si_loss": loss,
+            "interpolant_norm": jnp.mean(jnp.linalg.norm(x_t, axis=1)),
+        }
+        
+        return loss, metrics
+    
 
 
 
+# Utility functions for common interpolation schemes
+def linear_interpolation_coefficients(t: TimeArray) -> Tuple[TimeArray, TimeArray]:
+    """Standard linear interpolation coefficients."""
+    return 1 - t, t
 
+
+def cosine_interpolation_coefficients(t: TimeArray) -> Tuple[TimeArray, TimeArray]:
+    """Smooth cosine interpolation coefficients."""
+    alpha = 0.5 * (1 - jnp.cos(jnp.pi * t))
+    return 1 - alpha, alpha
+
+
+def polynomial_interpolation_coefficients(
+    t: TimeArray, 
+    power: float = 2.0
+) -> Tuple[TimeArray, TimeArray]:
+    """Polynomial interpolation with adjustable power."""
+    beta = t ** power
+    return 1 - beta, beta
 

@@ -128,7 +128,6 @@ pdpo_jax/
 
 Updated Implementation Order
 Phase 0: Generative Model Foundation (Week 0.5)
-generative/optimization/objectives.py - Objective functions
 generative/models/flow_matching.py - Flow matching implementation
 generative/models/stochastic_interpolants.py - SI implementation
 
