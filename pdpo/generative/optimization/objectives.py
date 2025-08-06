@@ -33,9 +33,9 @@ class ObjectiveFunction(ABC):
     @abstractmethod
     def compute_loss(
         self,
-        params: ModelParams,
         key: PRNGKeyArray,
         data_batch: SampleArray,
+        refrence_samples: Optional[SampleArray] = None,
         **kwargs
     )-> Tuple[Float[Array,""],Dict[str,Any]]:
         
@@ -129,19 +129,19 @@ class FlowMatchingObjective(ObjectiveFunction):
     
     def compute_loss(
             self,
+            model: nnx.Module,
             key: PRNGKeyArray,
             data_batch: SampleArray,
-            prior_samples: Optional[SampleArray] = None
+            refrence_samples: Optional[SampleArray] = None
     )-> Tuple[Float[Array,""],Dict[str,Any]]:
         '''Compute FM loss'''
 
         batch_size,dim = data_batch.shape
 
         # Sample from prior if not provided
-        if prior_samples == None:
-            
+        if reference_samples == None:
             key_prior,key = jrn.split(key)
-            prior_samples = jrn.normal(key = key_prior, shape=(batch_size,dim))
+            reference_samples = jrn.normal(key = key_prior, shape=(batch_size,dim))
 
         # Sample time points
         key_time,key = jrn.spit(key)
@@ -154,7 +154,7 @@ class FlowMatchingObjective(ObjectiveFunction):
             noise = jrn.normal(key= key_noise,batch_size = (batch_size,dim))
         
         # Compute interpolation and target velocity
-        x_t,u_t = self.interpolate(t = t, x0 = prior_samples, x1 = data_batch,noise=noise)
+        x_t,u_t = self.interpolate(t = t, x0 = reference_samples, x1 = data_batch,noise=noise)
 
         # Predict velocity
         v_pred = self.model_fn(t,x_t)
@@ -264,26 +264,25 @@ class StochasticInterpolantsObjective(ObjectiveFunction):
     
     def compute_loss(
         self,
-        params: ModelParams,
         key: PRNGKeyArray,
         data_batch: SampleArray,
-        prior_samples: Optional[SampleArray] = None,
+        reference_samples: Optional[SampleArray] = None,
         **kwargs
     ) -> Tuple[Float[Array, ""], Dict[str, Any]]:
         """Compute SI loss."""
         batch_size, dim = data_batch.shape
         
         # Sample components
-        if prior_samples is None:
+        if reference_samples is None:
             key_prior, key = jax.random.split(key)
-            prior_samples = jax.random.normal(key_prior, (batch_size, dim))
+            reference_samples = jax.random.normal(key_prior, (batch_size, dim))
         
         key_time, key_noise, key = jax.random.split(key, 3)
         t = jax.random.uniform(key_time, (batch_size,), minval=1e-4, maxval=1.0)
         noise = jax.random.normal(key_noise, (batch_size, dim))
         
         # Compute interpolant and target
-        x_t, u_t = self.compute_interpolant(t, prior_samples, data_batch, noise)
+        x_t, u_t = self.compute_interpolant(t, reference_samples, data_batch, noise)
         
         # Predict velocity
         v_pred = self.model_fn(params, t, x_t)
