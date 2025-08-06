@@ -12,7 +12,8 @@ from typing import Tuple,Dict,Any,Optional,Callable
 import jax
 import jax.numpy as jnp
 import jax.random as jrn
-from flax.nnx import sigmoid
+from jax.nn import sigmoid
+from flax import nnx
 from jaxtyping  import Array,Float, PRNGKeyArray
 
 
@@ -64,19 +65,15 @@ class FlowMatchingObjective(ObjectiveFunction):
 
     def __init__(
             self,
-            model_fn:Callable,
             sigma: float = 0.0,
             time_sampling: str = "uniform"
     ):
         '''
         Initialize FM        
         Args:
-            model_fn: Velocity field model function
             sigma: Noise level for conditional FM (0.0 for deterministic)
             time_sampling: Time sampling strategy ("uniform", "logit_normal")
         '''
-
-        self.model_fn = model_fn
         self.sigma = sigma
         self.time_sampling = time_sampling
 
@@ -130,34 +127,30 @@ class FlowMatchingObjective(ObjectiveFunction):
     def compute_loss(
             self,
             model: nnx.Module,
+            eval_model: Callable,
             key: PRNGKeyArray,
             data_batch: SampleArray,
             refrence_samples: Optional[SampleArray] = None
     )-> Tuple[Float[Array,""],Dict[str,Any]]:
         '''Compute FM loss'''
 
-        batch_size,dim = data_batch.shape
-
-        # Sample from prior if not provided
-        if reference_samples == None:
-            key_prior,key = jrn.split(key)
-            reference_samples = jrn.normal(key = key_prior, shape=(batch_size,dim))
+        batch_size,dim = data_batch.shape           
 
         # Sample time points
-        key_time,key = jrn.spit(key)
-        t = self.sample_time(key= key_time,batch_size=batch_size)
+        key_time,key = jrn.split(key)
+        t = self.sample_time(key= key_time,shape=batch_size)
 
         # Noise for CFM
         noise = None
         if self.sigma>0:
             key_noise,key = jrn.split(key)
-            noise = jrn.normal(key= key_noise,batch_size = (batch_size,dim))
+            noise = jrn.normal(key= key_noise,shape = (batch_size,dim))
         
         # Compute interpolation and target velocity
         x_t,u_t = self.interpolate(t = t, x0 = reference_samples, x1 = data_batch,noise=noise)
 
         # Predict velocity
-        v_pred = self.model_fn(t,x_t)
+        v_pred = eval_model(model,t,x_t,batch_size)
 
         l2_error = jnp.linalg.norm(v_pred-u_t,axis = 1)**2 # Norm in the spatial dimension
         # Loss fn 

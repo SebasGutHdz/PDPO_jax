@@ -15,7 +15,8 @@ from pdpo.core.types import (
     ScoreArray,
     PRNGKeyArray
 )
-from pdpo.generative.objetives import FlowMatchingObjective,ConditionalFlowMatching,StochasticInterpolantsObjective
+from pdpo.generative.optimization.objectives import FlowMatchingObjective,ConditionalFlowMatching,StochasticInterpolantsObjective
+from pdpo.ode.solvers import ODESolver
 
 
 class MatchingMethod(ABC):
@@ -50,8 +51,11 @@ class MatchingMethod(ABC):
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.ode_solver = ode_solver
-        if reference_sampler == None:
-            self.reference_sampler =  jrn.normal
+         if reference_sampler is None:
+            # Create a proper sampler function that takes key and shape
+            self.reference_sampler = lambda key, shape: jrn.normal(key=key, shape=shape)
+        else:
+            self.reference_sampler = reference_sampler
 
         
     def __repr__(self) -> str:
@@ -90,6 +94,36 @@ class MatchingMethod(ABC):
         """
         pass
     
+    def eval_model(
+        self,
+        model: nnx.Module,
+        t: TimeArray,
+        x: SampleArray,
+        batch_size: int
+    )-> VelocityArray:
+        """
+        Evaluate the velocity field model with proper time conditioning.
+        
+        Args:
+            model: The neural network model
+            t: Time values, float or jnp.array shape (batch_size,) or (batch_size,1)
+            x: Sample positions, shape (batch_size, dim) 
+            batch_size: Batch size for verification
+            
+        Returns:
+            Predicted velocities, shape (batch_size, dim)
+        """
+        if t.ndim ==0:  # element from jnp.array
+            t_explanded jnp.full((batch_size, 1), t)
+        elif t.ndim == 1: # Batch of times with format (bs,)
+            t_expanded = t.reshape(-1, 1)
+        elif  t.ndim == 2 : # Batch of times with correct format
+            t_expanded = t
+        else:
+            raise ValueError("t does not have the right shape, valid float of jnp with shapes (bs,) and (bs,1)")
+        model_input = jnp.concatenate([t_expanded,x], axis=-1)
+        v_pred = model(model_input)
+        return v_pred
     
     def sample_trajectory(
         self,
@@ -108,29 +142,27 @@ class MatchingMethod(ABC):
             samples: Final samples at t=1, shape (n_samples, dim)
             new_model_state: Updated model state
         """
-        dt = 1/n_steps
         t = jnp.linspace(0,1,n_steps)
-        x1 = self.ode_solver(self.vf_model,t[0],x0,dt)
-        for i in range(1,n_steps):
-            x1 = self.ode_solver(self.vf_model,t[i],x1,dt)
-        return x1
+        x = x0
+        dt = 1/(n_steps-1)
+
+        for i in range(n_steps - 1):
+            x = self.ode_solver.step(self.vf_model, t_span[i], x, dt)
+        return x
     
     def training_step(
         self,
-        params: ModelParams,
         key: PRNGKeyArray,
         data_batch: SampleArray,
-        x1: Optional[SampleArray] = None,
-        model_state: Optional[ModelState] = None
+        reference_samples: Optional[SampleArray] = None
     ) -> Tuple[Float[Array, ""], Dict[str, Any], ModelParams, ModelState]:
         """
         Execute one training step.
         
         Args:
-            params: Current model parameters
             key: JAX random key
             data_batch: Batch of target data
-            x1: Optional source data for ρ₀ → ρ₁ training
+            reference_samples: Optional source data for ρ₀ → ρ₁ training
             model_state: Optional model state
             
         Returns:
@@ -139,9 +171,12 @@ class MatchingMethod(ABC):
             updated_params: Updated model parameters
             updated_state: Updated model state
         """
+        batch_size,dim = data_batch.shape      
+        if reference_samples is None:
+            key_refernce,subkey = jnr.split(key)
+            reference_samples = self.reference_sampler(key_reference,batch_size)
         def loss_fn(model):
-            return self.compute_loss(model,key, data_batch, x1)
-        
+            return self.compute_loss(model,key,data_batch, reference_samples)
         # Compute loss and gradients
         (loss, metrics), grads = nnx.grad(loss_fn)(self.vf_model)
         
@@ -153,7 +188,7 @@ class MatchingMethod(ABC):
             new_lr = self.scheduler(self.optimizer.state.step)
             metrics['learning_rate'] = new_lr
             
-        return loss, metrics, new_params, new_model_state
+        return loss, metrics
     
     def train(
         self,
@@ -227,116 +262,3 @@ class MatchingMethod(ABC):
 
 
 
-class GenerativeModel(ABC):
-    """
-    Abstract base class for generative models.    
-    """
-
-    @abstractmethod
-    def __init__(
-        self,
-        dim: int,
-        model_fn: Callable[...,nnx.Module],
-        model_kwargs: Dict[str,Any],
-        **kwars
-    ):
-        """Initialize the generative model.
-        
-        Args:
-            dim: Dimension of the data space
-            model_fn: Constructor for the neural network (e.g., MLP)
-            model_kwargs: Arguments for model_fn
-            **kwargs: Additional model-specific arguments
-        """
-        pass
-
-    @abstractmethod
-    def compute_velocity(
-        self,
-        model: nnx.Module,
-        t: TimeArray,
-        x: SampleArray,
-    )-> VelocityArray:
-        """Compute the velocity field at given time and position.
-        
-        Args:
-            params: Model parameters
-            t: Time values in [0, 1]
-            x: Positions/samples
-            model_state: Optional model state (for models with batch norm, etc.)
-            
-        Returns:
-            velocity: Velocity field v(t, x)
-            new_model_state: Updated model state
-        """
-        pass
-
-    @abstractmethod
-    def sample_trajectory(
-        self,
-        params: ModelParams,
-        key: PRNGKeyArray,
-        n_samples: int,
-        n_steps: int = 10,
-        model_state: Optional[ModelState] = None
-    )-> Tuple[SampleArray,ModelState]:
-        """Sample from the learned distribution.
-        
-        Args:
-            params: Model parameters
-            key: JAX random key
-            n_samples: Number of samples to generate
-            n_steps: Number of integration steps
-            model_state: Optional model state
-            
-        Returns:
-            samples: Generated samples at t=1
-            new_model_state: Updated model state
-        """
-        pass
-
-    @abstractmethod
-    def training_step(
-        self,
-        params: ModelParams,
-        key: PRNGKeyArray,
-        data_batch: SampleArray,
-        model_state: Optional[ModelState] = None
-    ) -> Tuple[Float[Array, ""], Dict[str, Any], ModelState]:
-        """Compute loss for a training batch.
-        
-        Args:
-            params: Model parameters
-            key: JAX random key
-            data_batch: Batch of training data
-            model_state: Optional model state
-            
-        Returns:
-            loss: Scalar loss value
-            metrics: Dictionary of additional metrics
-            new_model_state: Updated model state
-        """
-        pass
-    @property
-    @abstractmethod
-    def requires_score(self) -> bool:
-        """Whether this model requires score function computation."""
-        pass
-    
-    def initialize_parameters(
-        self,
-        key: PRNGKeyArray,
-        dummy_input: SampleArray
-    ) -> Tuple[ModelParams, ModelState]:
-        """Initialize model parameters given a dummy input.
-        
-        Args:
-            key: JAX random key
-            dummy_input: Example input for shape inference
-            
-        Returns:
-            params: Initialized parameters
-            model_state: Initial model state
-        """
-        # This can have a default implementation
-        raise NotImplementedError("Subclasses should implement parameter initialization")

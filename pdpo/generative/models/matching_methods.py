@@ -62,14 +62,14 @@ class FlowMatching(MatchingMethod):
             reference_sampler = reference_sampler
         )
         
-        self.objective = FlowMatchingObjective(model_fn = vf_model,sigma = sigma,time_sampling = time_sampling)
+        self.objective = FlowMatchingObjective(sigma = sigma,time_sampling = time_sampling)
 
     def compute_loss(
         self,
         key: PRNGKeyArray,
         data_batch: SampleArray,
         reference_samples: Optional[SampleArray] = None,
-    ) -> Tuple[Float[Array, ""], Dict[str, Any], ModelState]:
+    ) -> Tuple[Float[Array, ""], Dict[str, Any]]:
         """
         Compute Flow Matching loss using existing objective.
         
@@ -77,7 +77,7 @@ class FlowMatching(MatchingMethod):
             params: Model parameters
             key: JAX random key
             data_batch: Target samples (ρ₁)
-            x1: Optional source samples (ρ₀). If None, use Gaussian
+            reference_samples: Optional source samples (ρ₀). If None, use Gaussian
             model_state: Optional model state
             
         Returns:
@@ -88,9 +88,10 @@ class FlowMatching(MatchingMethod):
         # Adapt to the actual API in your objectives module
         loss, metrics = self.objective.compute_loss(
             model=self.vf_model,
+            eval_model = self.eval_model
             key=key,
             data_batch=data_batch,  # Target samples
-            reference_samples=x1,  # Source samples (None for Gaussian)
+            reference_samples=reference_samples,  # Source samples (None for Gaussian)
         )
         
         return loss, metrics, new_model_state

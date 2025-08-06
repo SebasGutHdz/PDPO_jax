@@ -283,8 +283,8 @@ class DatasetSample(NamedTuple):
     label: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
-
-class DataBatch(NamedTuple):
+@dataclass
+class DataBatch:
     """Batch of data samples."""
     samples: SampleArray
     labels: Optional[List[str]] = None
@@ -293,7 +293,7 @@ class DataBatch(NamedTuple):
     def __post_init__(self):
         """Set batch_size if not provided."""
         if self.batch_size == 0:
-            object.__setattr__(self, 'batch_size', self.samples.shape[0])
+            self.batch_size = self.samples.shape[0]
 
 
 # =============================================================================
