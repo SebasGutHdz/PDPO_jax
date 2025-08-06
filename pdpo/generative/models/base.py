@@ -98,8 +98,7 @@ class MatchingMethod(ABC):
         self,
         model: nnx.Module,
         t: TimeArray,
-        x: SampleArray,
-        batch_size: int
+        x: SampleArray
     )-> VelocityArray:
         """
         Evaluate the velocity field model with proper time conditioning.
@@ -113,14 +112,17 @@ class MatchingMethod(ABC):
         Returns:
             Predicted velocities, shape (batch_size, dim)
         """
+        
         if t.ndim ==0:  # element from jnp.array
-            t_explanded = jnp.full((batch_size, 1), t)
+            t_expanded = jnp.full((x.shape[0], 1), t)
         elif t.ndim == 1: # Batch of times with format (bs,)
             t_expanded = t.reshape(-1, 1)
         elif  t.ndim == 2 : # Batch of times with correct format
             t_expanded = t
         else:
             raise ValueError("t does not have the right shape, valid float of jnp with shapes (bs,) and (bs,1)")
+
+        
         model_input = jnp.concatenate([t_expanded,x], axis=-1)
         v_pred = model(model_input)
         return v_pred
@@ -128,7 +130,8 @@ class MatchingMethod(ABC):
     def sample_trajectory(
         self,
         x0: SampleArray,
-        n_steps: int = 10,
+        ode_solver: ODESolver,
+        n_steps: int = 10
     ) -> SampleArray:
         """
         Generate sample trajectories by integrating the velocity field.
@@ -145,14 +148,17 @@ class MatchingMethod(ABC):
         t = jnp.linspace(0,1,n_steps)
         x = x0
         dt = 1/(n_steps-1)
-
+        eval_model = lambda t,x: self.eval_model(self.vf_model,t,x)
         for i in range(n_steps - 1):
-            x = self.ode_solver.step(self.vf_model, t[i], x, dt)
+            x = ode_solver.step(
+                f = eval_model,
+                t = t[i], 
+                x = x, 
+                dt = dt)
         return x
     # @nnx.jit
     def training_step(
         self,
-        vf_model: nnx.Module,
         key: PRNGKeyArray,
         data_batch: SampleArray,
         reference_samples: Optional[SampleArray] = None
@@ -180,10 +186,10 @@ class MatchingMethod(ABC):
             return self.compute_loss(model,key,data_batch, reference_samples)
         # Compute loss and gradients
         grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
-        (loss, metrics), grads = grad_fn(vf_model)
+        (loss, metrics), grads = grad_fn(self.vf_model)
         
         # Update parameters
-        self.optimizer.update(vf_model,grads)
+        self.optimizer.update(self.vf_model,grads)
         
         # Update learning rate if scheduler provided
         if self.scheduler is not None:

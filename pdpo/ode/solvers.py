@@ -60,7 +60,6 @@ class MidpointSolver(ODESolver):
         super().__init__(name='midpoint', order=2)
 
     def step(
-        self,
         f: Callable,
         t: float,
         x: SampleArray,

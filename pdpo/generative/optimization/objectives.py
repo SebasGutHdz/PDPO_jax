@@ -152,7 +152,7 @@ class FlowMatchingObjective(ObjectiveFunction):
         x_t,u_t = self.interpolate(t = t, x0 = reference_samples, x1 = data_batch,noise=noise)
 
         # Predict velocity
-        v_pred = eval_model(model,t,x_t,batch_size)
+        v_pred = eval_model(model,t,x_t)
 
         l2_error = jnp.linalg.norm(v_pred-u_t,axis = 1)**2 # Norm in the spatial dimension
         # Loss fn 
