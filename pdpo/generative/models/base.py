@@ -15,7 +15,7 @@ from pdpo.core.types import (
     ScoreArray,
     PRNGKeyArray
 )
-from pdpo.generative.optimization.objectives import FlowMatchingObjective,ConditionalFlowMatching,StochasticInterpolantsObjective
+# from pdpo.generative.optimization.objectives import FlowMatchingObjective,ConditionalFlowMatchingObjective,StochasticInterpolantsObjective
 from pdpo.ode.solvers import ODESolver
 
 
@@ -51,7 +51,7 @@ class MatchingMethod(ABC):
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.ode_solver = ode_solver
-         if reference_sampler is None:
+        if reference_sampler is None:
             # Create a proper sampler function that takes key and shape
             self.reference_sampler = lambda key, shape: jrn.normal(key=key, shape=shape)
         else:
@@ -73,6 +73,7 @@ class MatchingMethod(ABC):
     @abstractmethod
     def compute_loss(
         self,
+        model:nnx.Module,
         key: PRNGKeyArray,
         data_batch: SampleArray,
         reference_samples: Optional[SampleArray] = None,
@@ -85,12 +86,11 @@ class MatchingMethod(ABC):
             key: JAX random key
             data_batch: Target samples (ρ₁)
             x1: Optional source samples (ρ₀). If None, use Gaussian
-            model_state: Optional model state
             
         Returns:
             loss: Scalar loss value
             metrics: Dictionary of training metrics
-            new_model_state: Updated model state
+        
         """
         pass
     
@@ -114,7 +114,7 @@ class MatchingMethod(ABC):
             Predicted velocities, shape (batch_size, dim)
         """
         if t.ndim ==0:  # element from jnp.array
-            t_explanded jnp.full((batch_size, 1), t)
+            t_explanded = jnp.full((batch_size, 1), t)
         elif t.ndim == 1: # Batch of times with format (bs,)
             t_expanded = t.reshape(-1, 1)
         elif  t.ndim == 2 : # Batch of times with correct format
@@ -140,22 +140,23 @@ class MatchingMethod(ABC):
             n_steps: Number of integration steps (default: 10)            
         Returns:
             samples: Final samples at t=1, shape (n_samples, dim)
-            new_model_state: Updated model state
+        
         """
         t = jnp.linspace(0,1,n_steps)
         x = x0
         dt = 1/(n_steps-1)
 
         for i in range(n_steps - 1):
-            x = self.ode_solver.step(self.vf_model, t_span[i], x, dt)
+            x = self.ode_solver.step(self.vf_model, t[i], x, dt)
         return x
-    
+    # @nnx.jit
     def training_step(
         self,
+        vf_model: nnx.Module,
         key: PRNGKeyArray,
         data_batch: SampleArray,
         reference_samples: Optional[SampleArray] = None
-    ) -> Tuple[Float[Array, ""], Dict[str, Any], ModelParams, ModelState]:
+    ) -> Tuple[Float[Array, ""], Dict[str, Any]]:
         """
         Execute one training step.
         
@@ -163,25 +164,26 @@ class MatchingMethod(ABC):
             key: JAX random key
             data_batch: Batch of target data
             reference_samples: Optional source data for ρ₀ → ρ₁ training
-            model_state: Optional model state
+            
             
         Returns:
             loss: Scalar loss value
             metrics: Dictionary of training metrics
             updated_params: Updated model parameters
-            updated_state: Updated model state
+            
         """
         batch_size,dim = data_batch.shape      
         if reference_samples is None:
-            key_refernce,subkey = jnr.split(key)
-            reference_samples = self.reference_sampler(key_reference,batch_size)
+            key_refernce,subkey = jrn.split(key)
+            reference_samples = self.reference_sampler(key_reference,(batch_size,dim))
         def loss_fn(model):
             return self.compute_loss(model,key,data_batch, reference_samples)
         # Compute loss and gradients
-        (loss, metrics), grads = nnx.grad(loss_fn)(self.vf_model)
+        grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+        (loss, metrics), grads = grad_fn(vf_model)
         
         # Update parameters
-        self.optimizer.update(self.vf_model,grads)
+        self.optimizer.update(vf_model,grads)
         
         # Update learning rate if scheduler provided
         if self.scheduler is not None:
@@ -198,7 +200,7 @@ class MatchingMethod(ABC):
         batch_size: int,
         source_data: Optional[SampleArray] = None,
         eval_frequency: int = 100
-    ) -> Tuple[ModelParams, ModelState, Dict[str, Any]]:
+    ) -> Tuple[ModelParams, Dict[str, Any]]:
         """
         Train the generative model.
         
@@ -208,17 +210,13 @@ class MatchingMethod(ABC):
             num_epochs: Number of training epochs
             batch_size: Batch size for training
             source_data: Optional source distribution samples (ρ₀)
-            model_state: Initial model state
             eval_frequency: How often to log training progress
             
         Returns:
-            final_params: Trained model parameters
-            final_state: Final model state
+           
             training_history: Dictionary of training metrics over time
         """
         history = {'train_loss': [], 'epochs': []}
-        current_params = params
-        current_state = model_state
         
         num_batches = len(target_data) // batch_size
         
@@ -241,8 +239,8 @@ class MatchingMethod(ABC):
                 source_batch = shuffled_source[start_idx:end_idx] if shuffled_source is not None else None
                 
                 # Training step
-                loss, metrics, current_params, current_state = self.training_step(
-                    current_params, batch_key, target_batch, source_batch, current_state
+                loss, metrics = self.training_step(
+                    batch_key, target_batch, source_batch
                 )
                 
                 epoch_loss += loss
@@ -255,7 +253,7 @@ class MatchingMethod(ABC):
                 history['epochs'].append(epoch)
                 print(f"Epoch {epoch}: Loss = {avg_loss:.4f}")
                 
-        return current_params, current_state, history
+        return history
     
 
 

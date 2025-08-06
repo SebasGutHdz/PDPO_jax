@@ -19,7 +19,7 @@ from pdpo.core.types import (
 from pdpo.generative.optimization.objectives import FlowMatchingObjective
 from pdpo.ode import solvers
 from pdpo.ode.solvers import ODESolver
-from pdpo.generative.base import MatchingMethod
+from pdpo.generative.models.base import MatchingMethod
 
 
 
@@ -41,7 +41,7 @@ class FlowMatching(MatchingMethod):
         optimizer: nnx.Optimizer,
         ode_solver: ODESolver,
         sigma: float = 0.1,
-        time_sampling: 'uniform',
+        time_sampling: str =  'uniform',
         scheduler: Optional[Callable] = None,
         reference_sampler: Optional[Callable] = None,
     ):
@@ -66,6 +66,7 @@ class FlowMatching(MatchingMethod):
 
     def compute_loss(
         self,
+        vf_model: nnx.Module,
         key: PRNGKeyArray,
         data_batch: SampleArray,
         reference_samples: Optional[SampleArray] = None,
@@ -78,7 +79,6 @@ class FlowMatching(MatchingMethod):
             key: JAX random key
             data_batch: Target samples (ρ₁)
             reference_samples: Optional source samples (ρ₀). If None, use Gaussian
-            model_state: Optional model state
             
         Returns:
             loss: Scalar loss value
@@ -87,14 +87,14 @@ class FlowMatching(MatchingMethod):
         # Use existing flow_matching_loss from objectives.py
         # Adapt to the actual API in your objectives module
         loss, metrics = self.objective.compute_loss(
-            model=self.vf_model,
-            eval_model = self.eval_model
+            model=vf_model,
+            eval_model = self.eval_model,
             key=key,
             data_batch=data_batch,  # Target samples
             reference_samples=reference_samples,  # Source samples (None for Gaussian)
         )
         
-        return loss, metrics, new_model_state
+        return loss, metrics
     
     
     
@@ -102,9 +102,8 @@ class FlowMatching(MatchingMethod):
         self,
         params: ModelParams,
         t: float,
-        x: SampleArray,
-        model_state: Optional[ModelState] = None
-    ) -> Tuple[SampleArray, ModelState]:
+        x: SampleArray
+    ) -> SampleArray:
         """
         Compute velocity field v_θ(t, x) using the neural network.
         
@@ -112,11 +111,9 @@ class FlowMatching(MatchingMethod):
             params: Model parameters
             t: Time value (scalar)
             x: Position samples, shape (batch_size, dim)
-            model_state: Optional model state
             
         Returns:
             velocity: Velocity field v_θ(t, x), shape (batch_size, dim)
-            new_model_state: Updated model state
         """
         batch_size = x.shape[0]
         
@@ -129,4 +126,4 @@ class FlowMatching(MatchingMethod):
         # Forward pass through the velocity field network
         velocity = self.vf_model(model_input)
 
-        return velocity,model_state
+        return velocity

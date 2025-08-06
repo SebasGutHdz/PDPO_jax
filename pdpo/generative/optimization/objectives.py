@@ -34,6 +34,8 @@ class ObjectiveFunction(ABC):
     @abstractmethod
     def compute_loss(
         self,
+        model: nnx.Module,
+        eval_nf: Callable,
         key: PRNGKeyArray,
         data_batch: SampleArray,
         refrence_samples: Optional[SampleArray] = None,
@@ -130,7 +132,7 @@ class FlowMatchingObjective(ObjectiveFunction):
             eval_model: Callable,
             key: PRNGKeyArray,
             data_batch: SampleArray,
-            refrence_samples: Optional[SampleArray] = None
+            reference_samples: Optional[SampleArray] = None
     )-> Tuple[Float[Array,""],Dict[str,Any]]:
         '''Compute FM loss'''
 
@@ -138,7 +140,7 @@ class FlowMatchingObjective(ObjectiveFunction):
 
         # Sample time points
         key_time,key = jrn.split(key)
-        t = self.sample_time(key= key_time,shape=batch_size)
+        t = self.sample_time(key= key_time,batch_size=batch_size)
 
         # Noise for CFM
         noise = None

@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int, Bool, PyTree
 from flax import nnx
-
+from dataclasses import dataclass
 # =============================================================================
 # JAX and Random Key Types
 # =============================================================================
