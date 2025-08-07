@@ -24,6 +24,8 @@ from pdpo.core.types import (
     VelocityArray,
     ScoreArray
 )
+from pdpo.generative.models.interpolant_schedules import InterpolantSchedule
+
 
 
 class ObjectiveFunction(ABC):
@@ -56,6 +58,40 @@ class ObjectiveFunction(ABC):
         """
         pass
 
+    def sample_time(self,key:PRNGKeyArray,batch_size: int)-> TimeArray:
+
+        '''Sample time points for training'''
+
+        if self.time_sampling == "uniform":
+            return jrn.uniform(key,(batch_size,), minval=1e-4,maxval=1.0-1e-4)
+        elif self.time_sampling == "logit_normal":
+            normal_samples = jrn.normal(key=key, shape=(batch_size,))
+            return sigmoid(normal_samples)
+        else:
+            raise ValueError(f"Unknown time sampling: {self.time_sampling}")
+
+    @abstractmethod
+    def interpolate(
+            self,
+            t: TimeArray,
+            x0:SampleArray,
+            x1:SampleArray,
+            noise:Optional[SampleArray] = None
+    )-> Tuple[SampleArray,VelocityArray]:
+        """Compute interpolated samples and target velocities.
+        
+        Args:
+            t: Time points [batch_size]
+            x0: Source samples [batch_size, dim]  
+            x1: Target samples [batch_size, dim]
+            noise: Optional noise samples [batch_size, dim] (This is passed for jax key control management)
+            
+        Returns:
+            x_t: Interpolated samples [batch_size, dim]
+            u_t: Target velocity [batch_size, dim]
+        """
+        pass
+
 
 
 class FlowMatchingObjective(ObjectiveFunction):
@@ -79,17 +115,17 @@ class FlowMatchingObjective(ObjectiveFunction):
         self.sigma = sigma
         self.time_sampling = time_sampling
 
-    def sample_time(self,key:PRNGKeyArray,batch_size: int)-> TimeArray:
+    # def sample_time(self,key:PRNGKeyArray,batch_size: int)-> TimeArray:
 
-        '''Sample time points for training'''
+    #     '''Sample time points for training'''
 
-        if self.time_sampling == "uniform":
-            return jrn.uniform(key,(batch_size,), minval=1e-6,maxval=1.0)
-        elif self.time_sampling == "logit_normal":
-            normal_samples = jrn.normal(key=key, shape=(batch_size,))
-            return sigmoid(normal_samples)
-        else:
-            raise ValueError(f"Unknown time sampling: {self.time_sampling}")
+    #     if self.time_sampling == "uniform":
+    #         return jrn.uniform(key,(batch_size,), minval=1e-6,maxval=1.0)
+    #     elif self.time_sampling == "logit_normal":
+    #         normal_samples = jrn.normal(key=key, shape=(batch_size,))
+    #         return sigmoid(normal_samples)
+    #     else:
+    #         raise ValueError(f"Unknown time sampling: {self.time_sampling}")
         
     def interpolate(
             self,
@@ -205,15 +241,15 @@ class ConditionalFlowMatchingObjective(FlowMatchingObjective):
             
         return x_t, u_t
     
-class StochasticInterpolantsObjective(ObjectiveFunction):
+class StochasticInterpolantObjective(ObjectiveFunction):
     """Stochastic Interpolants objective for generalized transport."""
     
     def __init__(
         self,
-        model_fn: Callable,
         alpha_fn: Callable[[TimeArray], TimeArray] = lambda t: 1 - t,
         beta_fn: Callable[[TimeArray], TimeArray] = lambda t: t,
-        gamma_fn: Callable[[TimeArray], TimeArray] = lambda t: jnp.sqrt(t * (1 - t))
+        gamma_fn: Callable[[TimeArray], TimeArray] = lambda t: jnp.sqrt(t * (1 - t)),
+        time_sampling: str = "uniform"
     ):
         """Initialize SI objective.
         
@@ -223,12 +259,11 @@ class StochasticInterpolantsObjective(ObjectiveFunction):
             beta_fn: Coefficient for x_1 in interpolant  
             gamma_fn: Coefficient for noise in interpolant
         """
-        self.model_fn = model_fn
         self.alpha_fn = alpha_fn
         self.beta_fn = beta_fn
         self.gamma_fn = gamma_fn
-    
-    def compute_interpolant(
+        self.time_sampling = time_sampling
+    def interpolate(
         self,
         t: TimeArray,
         x0: SampleArray,
@@ -259,36 +294,37 @@ class StochasticInterpolantsObjective(ObjectiveFunction):
     
     def compute_loss(
         self,
+        model: nnx.Module,
+        eval_model: Callable,
         key: PRNGKeyArray,
         data_batch: SampleArray,
-        reference_samples: Optional[SampleArray] = None,
-        **kwargs
+        reference_samples: Optional[SampleArray] = None
     ) -> Tuple[Float[Array, ""], Dict[str, Any]]:
-        """Compute SI loss."""
+        """Compute SI loss following the FlowMatching pattern."""
         batch_size, dim = data_batch.shape
         
-        # Sample components
-        if reference_samples is None:
-            key_prior, key = jax.random.split(key)
-            reference_samples = jax.random.normal(key_prior, (batch_size, dim))
+        # Sample time points
+        key_time, key = jrn.split(key)
+        t = self.sample_time(key=key_time, batch_size=batch_size)
         
-        key_time, key_noise, key = jax.random.split(key, 3)
-        t = jax.random.uniform(key_time, (batch_size,), minval=1e-4, maxval=1.0)
-        noise = jax.random.normal(key_noise, (batch_size, dim))
+        # Sample noise
+        key_noise, key = jrn.split(key)
+        noise = jrn.normal(key=key_noise, shape=(batch_size, dim))
         
-        # Compute interpolant and target
-        x_t, u_t = self.compute_interpolant(t, reference_samples, data_batch, noise)
+        # Compute interpolant and target velocity
+        x_t, u_t = self.interpolate(t, reference_samples, data_batch, noise)
         
-        # Predict velocity
-        v_pred = self.model_fn(params, t, x_t)
-
-        l2_error = jnp.linalg.norm(v_pred-u_t,axis = -1)**2
+        # Predict velocity using eval_model pattern
+        v_pred = eval_model(model, t, x_t)
         
         # Compute loss
+        l2_error = jnp.linalg.norm(v_pred - u_t, axis=1)**2
         loss = jnp.mean(l2_error)
         
         metrics = {
             "si_loss": loss,
+            "velocity_norm": jnp.mean(jnp.linalg.norm(v_pred, axis=1)),
+            "target_velocity_norm": jnp.mean(jnp.linalg.norm(u_t, axis=1)),
             "interpolant_norm": jnp.mean(jnp.linalg.norm(x_t, axis=1)),
         }
         

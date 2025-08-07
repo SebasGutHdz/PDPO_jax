@@ -16,10 +16,12 @@ from pdpo.core.types import (
     SampleArray,
     TimeArray
 )
-from pdpo.generative.optimization.objectives import FlowMatchingObjective
+from pdpo.generative.optimization.objectives import FlowMatchingObjective,StochasticInterpolantObjective
 from pdpo.ode import solvers
 from pdpo.ode.solvers import ODESolver
 from pdpo.generative.models.base import MatchingMethod
+from pdpo.generative.models.interpolant_schedules import InterpolantSchedule
+
 
 
 
@@ -127,3 +129,94 @@ class FlowMatching(MatchingMethod):
         velocity = self.vf_model(model_input)
 
         return velocity
+
+
+
+
+class StochasticInterpolant(MatchingMethod):
+    """
+    Stochastic Interpolants implementation for generative modeling.
+    
+    Implements the generalized SI objective:
+    L = E[||v_θ(t, x_t) - u_t||²]
+    where x_t = α(t)x_0 + β(t)x_1 + γ(t)ε
+    and u_t = α'(t)x_0 + β'(t)x_1 + γ'(t)ε
+    """
+    
+    def __init__(
+        self,
+        vf_model: nnx.Module,
+        optimizer: nnx.Optimizer,
+        ode_solver: ODESolver,
+        interpolant_schedule: str = "linear",
+        schedule_params: Optional[Dict] = None,
+        time_sampling: str = 'uniform',
+        scheduler: Optional[Callable] = None,
+        reference_sampler: Optional[Callable] = None,
+    ):
+        """
+        Initialize Stochastic Interpolants method.
+        
+        Args:
+            vf_model: Velocity field neural network (nnx.Module)
+            optimizer: JAX optimizer for training
+            ode_solver: ODE solver for trajectory generation
+            interpolant_schedule: Type of interpolant schedule ("linear", "trigonometric", "polynomial", "vp")
+            schedule_params: Parameters for the interpolant schedule (e.g., {"sigma": 0.1, "power": 2.0})
+            time_sampling: Time sampling strategy ('uniform', 'logit_normal')
+            scheduler: Optional learning rate scheduler
+            reference_sampler: Optional reference distribution sampler
+        """
+        super().__init__(
+            method_name="si",
+            vf_model=vf_model,
+            optimizer=optimizer,
+            ode_solver=ode_solver,
+            scheduler=scheduler,
+            reference_sampler=reference_sampler
+        )
+        
+        # Setup interpolant schedule
+        if schedule_params is None:
+            schedule_params = {"sigma": 0.1}
+        
+        self.schedule = InterpolantSchedule(interpolant_schedule, **schedule_params)
+        alpha_fn, beta_fn, gamma_fn = self.schedule.get_coefficient_functions()
+        
+        # Create objective with coefficient functions
+        self.objective = StochasticInterpolantObjective(
+            alpha_fn=alpha_fn,
+            beta_fn=beta_fn, 
+            gamma_fn=gamma_fn,
+            time_sampling=time_sampling
+        )
+    
+    def compute_loss(
+        self,
+        vf_model: nnx.Module,
+        key: PRNGKeyArray,
+        data_batch: SampleArray,
+        reference_samples: Optional[SampleArray] = None,
+    ) -> Tuple[Float[Array, ""], Dict[str, Any]]:
+        """
+        Compute Stochastic Interpolants loss using the objective.
+        
+        Args:
+            vf_model: Velocity field model
+            key: JAX random key
+            data_batch: Target samples (ρ₁)
+            reference_samples: Optional source samples (ρ₀). If None, use Gaussian
+            
+        Returns:
+            loss: Scalar loss value
+            metrics: Dictionary of training metrics
+        """
+        loss, metrics = self.objective.compute_loss(
+            model=vf_model,
+            eval_model=self.eval_model,
+            key=key,
+            data_batch=data_batch,
+            reference_samples=reference_samples,
+        )
+        
+        return loss, metrics
