@@ -44,7 +44,7 @@ class MatchingMethod(ABC):
             optimizer: JAX optimizer for training
             scheduler: Optional learning rate scheduler
         """
-        assert method_name in ["fm", "cfm", "si"], f"Invalid method_name: {method_name}"
+        assert method_name in ["FM", "cfm", "SI"], f"Invalid method_name: {method_name}"
         
         self.method_name = method_name
         self.vf_model = vf_model

@@ -56,7 +56,7 @@ class FlowMatching(MatchingMethod):
             scheduler: Optional learning rate scheduler
         """
         super().__init__(
-            method_name="fm",
+            method_name="FM",
             vf_model=vf_model,
             optimizer=optimizer,
             ode_solver = ode_solver,
@@ -168,7 +168,7 @@ class StochasticInterpolant(MatchingMethod):
             reference_sampler: Optional reference distribution sampler
         """
         super().__init__(
-            method_name="si",
+            method_name="SI",
             vf_model=vf_model,
             optimizer=optimizer,
             ode_solver=ode_solver,
