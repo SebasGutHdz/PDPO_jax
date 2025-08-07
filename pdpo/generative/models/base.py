@@ -175,23 +175,25 @@ class MatchingMethod(ABC):
         Returns:
             loss: Scalar loss value
             metrics: Dictionary of training metrics
-            updated_params: Updated model parameters
+            
             
         """
-        batch_size,dim = data_batch.shape      
+        batch_size, dim = data_batch.shape      
         if reference_samples is None:
-            key_refernce,subkey = jrn.split(key)
-            reference_samples = self.reference_sampler(key_reference,(batch_size,dim))
+            key_reference, subkey = jrn.split(key)
+            reference_samples = self.reference_sampler(key_reference, (batch_size, dim))
+            
         def loss_fn(model):
-            return self.compute_loss(model,key,data_batch, reference_samples)
+            return self.compute_loss(model, key, data_batch, reference_samples)
+        
         # Compute loss and gradients
         grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
         (loss, metrics), grads = grad_fn(self.vf_model)
         
-        # Update parameters
-        self.optimizer.update(self.vf_model,grads)
+        # Update parameters 
+        self.optimizer.update(self.vf_model, grads)
         
-        # Update learning rate if scheduler provided
+        # Handle scheduler updates if needed
         if self.scheduler is not None:
             new_lr = self.scheduler(self.optimizer.state.step)
             metrics['learning_rate'] = new_lr

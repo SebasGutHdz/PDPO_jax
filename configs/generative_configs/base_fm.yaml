@@ -9,6 +9,7 @@ training:
   seed: 0
 
 model:
+  type: 'mlp' # 'mlp' or 'mlp_time_embedding' or ...
   input_dim: 2
   hidden_dim: 128
   num_layers: 4
@@ -22,9 +23,9 @@ method:
 
 data:
   source_type: "std_gaussian"
-  target_type: "gaussian1"
+  target_type: "gaussian0"
   dim: 2  # For high-dimensional datasets
 
 output:
   checkpoint_dir: "checkpoints/generative/"
-  model_name: "fm_std_gaussian_to_gaussian1"
+  model_name: "fm_std_gaussian_to_gaussian0"

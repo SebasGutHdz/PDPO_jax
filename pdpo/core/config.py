@@ -23,6 +23,7 @@ class TrainingConfig:
 @dataclass
 class ModelConfig:
     """Model architecture configuration."""
+    type: str  
     input_dim: int
     hidden_dim: int
     num_layers: int
@@ -104,4 +105,4 @@ def setup_device(device_str: str):
     
     jax.default_device(device)
     print(f"Using device: {device}")
-    return device
+    return
