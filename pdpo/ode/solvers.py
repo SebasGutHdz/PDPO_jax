@@ -112,14 +112,20 @@ def sample_trajectory(
         vf: nnx.Module,
         x0: SampleArray,
         ode_solver:ODESolver = MidpointSolver,
-        n_steps: int = 10        
+        n_steps: int = 10,
+        backward: bool = False,
 ):
     """
     Sample a trajectory using the ODE solver with the velocity field model.
     """
-    t = jnp.linspace(0, 1, n_steps)
+    if backward:
+        # Reverse the order of time steps for backward integration
+        t = jnp.linspace(1.0, 0.0, n_steps)
+    else:
+        # Forward time steps    
+        t = jnp.linspace(0, 1, n_steps)
     x = x0
-    dt = 1.0 / (n_steps - 1)
+    dt = (t[1]-t[0])
     eval_model_ = lambda t,x: eval_model(vf,t,x)
     for i in range(n_steps - 1):
         x = ode_solver.step(

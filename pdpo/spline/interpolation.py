@@ -9,8 +9,9 @@ from typing import List
 from jaxtyping import Array, Float, PyTree
 from typing import Tuple
 
-from pdpo.core.types import TimeStepsArray
 
+from pdpo.core.types import TimeStepsArray
+from pdpo.spline.types_interpolation import SplineState 
 
 
 
@@ -134,3 +135,24 @@ def unstack_pytree(batched_tree):
     """
     T = jax.tree_util.tree_leaves(batched_tree)[0].shape[0]
     return [jax.tree_util.tree_map(lambda x: x[i], batched_tree) for i in range(T)]
+
+
+def interp(spline_state: SplineState, query_t: TimeStepsArray) -> List[PyTree]:
+    """
+    Interpolate spline at query times.
+    
+    Args:
+        spline_state: Spline state containing control points
+        query_t: Query time points
+        
+    Returns:
+        Interpolated parameters at query times
+    """
+    # Combine boundary and interior points
+    theta0, theta1 = spline_state.boundary_params
+    all_points = [theta0] + spline_state.control_points + [theta1]
+    
+    if spline_state.config.spline_type == 'cubic':
+        return unstack_pytree(cubic_interp(spline_state.time_points, all_points, query_t))
+    else:  # linear
+        return unstack_pytree(linear_interp(spline_state.time_points, all_points, query_t))
