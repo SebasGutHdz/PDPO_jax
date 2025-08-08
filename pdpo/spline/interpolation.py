@@ -32,6 +32,34 @@ def linear_interpolation_states(state0,state1,t_points):
 
     return param_series
 
+
+
+def linear_interp(
+    t: Float[Array, "T"],
+    xt: List[PyTree],
+    s_query: Float[Array, "S"]
+) -> List[PyTree]:
+    
+    x_vals = jax.tree.map(lambda *args: jnp.stack(args), *xt)
+    def interp_one_time(s):
+        # Find index of left point
+        idx = jnp.searchsorted(t, s, side="right") - 1
+        idx = jnp.clip(idx, 0, len(t) - 2)
+        # idx_item = idx.item()
+        t0, t1 = t[idx], t[idx + 1]
+        # xt0 = xt[idx_item]#jax.tree.map(lambda arr: arr[idx], xt)
+        # xt1 = xt[idx_item+1]#jax.tree.map(lambda arr: arr[idx + 1], xt)
+        def index(pytree, i):
+            return jax.tree.map(lambda arr: jax.lax.dynamic_index_in_dim(arr, i, axis=0, keepdims=False), pytree)
+
+        xt0 = index(x_vals, idx)
+        xt1 = index(x_vals, idx + 1)
+        alpha = (s - t0) / (t1 - t0)
+        return jax.tree.map(lambda a, b: (1 - alpha) * a + alpha * b, xt0, xt1)
+
+    return jax.vmap(interp_one_time)(s_query)
+
+
 def cubic_interp(
     t: Float[Array, "T"],        # Control point times
     xt: List[PyTree],                  # Control point parameters (PyTree) 
