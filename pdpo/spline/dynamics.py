@@ -29,6 +29,7 @@ from pdpo.models.builder import create_model
 
 def gen_sample_trajectory(
     spline_state: SplineState,
+    vf: nnx.Module,
     key: PRNGKeyArray,
     x0: Optional[SampleArray] = None,
     num_samples: int = 1000,
@@ -82,12 +83,12 @@ def gen_sample_trajectory(
     # In future: augment z with log_density and/or score
     
     # Build parametric map
-    key, subkey = jrn.split(key)
-    arch = spline_state.config.architecture +[subkey]
-    vf = create_model(
-        type=spline_state.config.type_architecture,
-        args_arch=arch
-    )
+    # key, subkey = jrn.split(key)
+    # arch = spline_state.config.architecture +[subkey]
+    # vf = create_model(
+    #     type=spline_state.config.type_architecture,
+    #     args_arch=arch
+    # )
 
     # Generate trajectory by pushing forward through each time step
     for i in range(time_steps_traj):

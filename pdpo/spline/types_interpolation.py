@@ -51,6 +51,8 @@ class ProblemConfig:
     """Configuration for the optimization problem."""
     splinestate: SplineState
     ''' Configuration of spline curve. '''
+    discretization_integral: int = 20
+    ''' Number of points for integral approximation. '''
     ke_modifier: Optional[List[Callable]] = None  
     ''' Kinetic energy modifiers '''
     potential: Optional[List[Callable]] = None

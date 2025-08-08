@@ -1,6 +1,7 @@
 
 from typing import List, Optional, Tuple, Callable
 import jax
+from functools import partial
 import jax.numpy as jnp
 
 
@@ -21,6 +22,9 @@ from pdpo.core.types import (
 # Energy Functions
 # =============================================================================
 
+
+
+# @partial(jax.jit, static_argnums=(2,3))  # p is position 2,
 def kinetic_energy(
     samples_path: TrajectoryArray,
     times_path: TimeStepsArray,
@@ -68,7 +72,7 @@ def kinetic_energy(
     
     return ke
 
-
+# @jax.jit
 def potential_energy(
     samples_path: TrajectoryArray,
     potential_fns: Optional[List[Callable]] = None
@@ -114,9 +118,10 @@ def lagrangian(
     if times_path[0] > times_path[1]:
         times_path = jnp.flip(times_path)
         samples_path = jnp.flip(samples_path, axis=1)
-    
+    p_int = int(problem_config.p)
+    ke_mod = None
     # Compute kinetic energy
-    ke = kinetic_energy(samples_path, times_path, p=problem_config.p)
+    ke = kinetic_energy(samples_path, times_path, p=p_int, ke_modifier=ke_mod)
     ke_integrated = jnp.trapezoid(ke, times_path) / 2
     
     # Compute potential energy

@@ -22,6 +22,8 @@ from pdpo.core.types import (
     ScalarArray, PRNGKeyArray, SampleArray
 )
 from pdpo.spline.types_interpolation import SplineState, SplineConfig,OptimizationHistory,ProblemConfig
+from pdpo.core.config import setup_device
+from pdpo.models.builder import create_model
 
 
 
@@ -33,7 +35,6 @@ def optimize_path(
     problem_config: ProblemConfig,
     key: PRNGKeyArray,
     epochs: int,
-    t_partition: int,
     learning_rate: float = 1e-3,
     t_node: int = 10,
     bs: int = 1000,
@@ -46,7 +47,6 @@ def optimize_path(
         problem_config: Configuration for the optimization problem
         key: JAX random key
         epochs: Number of optimization iterations
-        t_partition: Number of time points to evaluate trajectory
         learning_rate: Learning rate for optimization
         t_node: Number of integration steps for NODE solver
         bs: Batch size for sampling
@@ -56,11 +56,12 @@ def optimize_path(
         optimized_state: Updated spline state
         history: Optimization history
     """
+    setup_device(problem_config.splinestate.config.device)
     # Initialize optimizer
     optimizer = optax.adam(learning_rate)
-    spline_state = problem_config.spline_state
+    spline_state = problem_config.splinestate
     opt_state = optimizer.init(spline_state.control_points)
-
+    t_partition = problem_config.discretization_integral
     # Time points for trajectory evaluation
     t_traj = jnp.linspace(0, 1, t_partition)
     
@@ -72,7 +73,7 @@ def optimize_path(
             batch_size=bs,
             dim=spline_state.config.architecture[0]
         )
-    key, subkey = jrn.split(key)
+        key, subkey = jrn.split(key)
     # History tracking
     history = OptimizationHistory(
         lagrangian=[],
@@ -80,16 +81,26 @@ def optimize_path(
         potential=[],
         iterations=[]
     )
+
+    
+    arch = spline_state.config.architecture +[subkey]
+    key, subkey = jrn.split(key)
+    vf = create_model(
+        type=spline_state.config.type_architecture,
+        args_arch=arch
+    )
+
     
     # Define loss function
-    def loss_fn(control_points, key):
+    def loss_fn(control_points, subkey):
         # Create temporary spline state with updated control points
         temp_state = replace(spline_state, control_points=control_points)
         
         # Generate sample trajectory
         samples_path = gen_sample_trajectory(
             temp_state,
-            key=key,
+            vf,
+            key=subkey,
             x0=x0,
             num_samples=bs,
             t_traj=t_traj,
@@ -101,7 +112,7 @@ def optimize_path(
         total_cost, ke, pe = lagrangian(
             samples_path,
             t_traj,
-            temp_state
+            problem_config
         )
         
         return total_cost, (ke, pe)

@@ -7,6 +7,8 @@ from typing import Any, Callable,Optional,Tuple
 import jax.numpy as jnp
 from jaxtyping import Array,Float
 from flax import nnx
+from functools import partial
+import jax
 
 
 from pdpo.core.types import (
@@ -42,6 +44,7 @@ class EulerSolver(ODESolver):
     def __init__(self):
         super().__init__(name='euler', order=1)
 
+    # @partial(jax.jit, static_argnums=(0,))
     def step(
         self,
         f: Callable,
@@ -60,6 +63,7 @@ class MidpointSolver(ODESolver):
     def __init__(self):
         super().__init__(name='midpoint', order=2)
 
+    # @partial(jax.jit, static_argnums=(0,))
     def step(
         f: Callable,
         t: float,
