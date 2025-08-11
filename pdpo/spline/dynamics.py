@@ -82,13 +82,6 @@ def gen_sample_trajectory(
     # Placeholder for entropy/Fisher information
     # In future: augment z with log_density and/or score
     
-    # Build parametric map
-    # key, subkey = jrn.split(key)
-    # arch = spline_state.config.architecture +[subkey]
-    # vf = create_model(
-    #     type=spline_state.config.type_architecture,
-    #     args_arch=arch
-    # )
 
     # Generate trajectory by pushing forward through each time step
     for i in range(time_steps_traj):

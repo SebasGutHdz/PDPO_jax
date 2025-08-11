@@ -115,9 +115,9 @@ def lagrangian(
         pe: Potential energy component
     """
     # Ensure correct time ordering
-    if times_path[0] > times_path[1]:
-        times_path = jnp.flip(times_path)
-        samples_path = jnp.flip(samples_path, axis=1)
+    # if times_path[0] > times_path[1]:
+    #     times_path = jnp.flip(times_path)
+    #     samples_path = jnp.flip(samples_path, axis=1)
     p_int = int(problem_config.p)
     ke_mod = None
     # Compute kinetic energy
