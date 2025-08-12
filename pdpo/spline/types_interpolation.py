@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Dict, Any, Callable, NamedTuple 
+from typing import List, Optional, Tuple, Dict, Any, Callable, NamedTuple, Union, Sequence
 from jaxtyping import Array, Float, PyTree
 from pdpo.core.types import (TimeStepsArray)
 from pdpo.ode.solvers import ODESolver, MidpointSolver
+from pdpo.energy_model.potentials.obstacles import POTENTIAL_NAME_TO_IDX
+import jax.numpy as jnp
 # =============================================================================
 # Configuration and State Types
 # =============================================================================
@@ -55,15 +57,37 @@ class ProblemConfig:
     ''' Number of points for integral approximation. '''
     ke_modifier: Optional[List[Callable]] = None  
     ''' Kinetic energy modifiers '''
-    potential: Optional[List[Callable]] = None
+    # potential: Optional[List[Callable]] = None
+    potential: Optional[Union[Sequence[str], Sequence[int]]] = None
     ''' Potential energy terms '''
+    # potential_coefficients: Optional[List[float]] = None
+    potential_coefficients: Optional[Sequence[float]] = None
+    ''' Coefficients for potential energy terms '''
     entropy: int = 0
     ''' Entropy coefficient for the optimization '''
     fisher: int = 0
     ''' Fisher information coefficient for the optimization '''
     p: int = 2
     ''' Norm for kinetic energy ''' 
-   
+    def __post_init__(self):
+        if self.potential is not None:
+            # Convert string names → integer indices
+            if isinstance(self.potential[0], str):
+                self.potential = jnp.array(
+                    [POTENTIAL_NAME_TO_IDX[name] for name in self.potential],
+                    dtype=jnp.int32
+                )
+            else:
+                self.potential = jnp.array(self.potential, dtype=jnp.int32)
+
+        if self.potential is not None and self.potential_coefficients is not None:
+            if len(self.potential) != len(self.potential_coefficients):
+                raise ValueError(
+                    "Length of potential and potential_coefficients must match."
+                )
+            self.potential_coefficients = jnp.array(
+                self.potential_coefficients, dtype=jnp.float32
+            )
 
 @dataclass
 class OptimizationHistory:

@@ -23,8 +23,6 @@ from pdpo.core.types import (
 # =============================================================================
 
 
-
-# @partial(jax.jit, static_argnums=(2,3))  # p is position 2,
 def kinetic_energy(
     samples_path: TrajectoryArray,
     times_path: TimeStepsArray,

@@ -15,7 +15,8 @@ from jaxtyping import Array, PyTree
 from pdpo.spline.interpolation import linear_interpolation_states, cubic_interp, linear_interp
 from pdpo.spline.types_interpolation import  ProblemConfig
 from pdpo.data.toy_datasets import inf_train_gen
-from pdpo.spline.energy import kinetic_energy, potential_energy, lagrangian
+# from pdpo.spline.energy import kinetic_energy, potential_energy, lagrangian
+from pdpo.energy_model.lagrangian import lagrangian
 from pdpo.spline.dynamics import gen_sample_trajectory
 from pdpo.core.types import (
  TrajectoryArray, TimeStepsArray, EnergyArray,
@@ -24,7 +25,6 @@ from pdpo.core.types import (
 from pdpo.spline.types_interpolation import SplineState, SplineConfig,OptimizationHistory,ProblemConfig
 from pdpo.core.config import setup_device
 from pdpo.models.builder import create_model
-
 
 
 # =============================================================================
@@ -102,7 +102,8 @@ def optimize_path(
             solver=spline_state.config.solver
         )
 
-        total_cost, ke, pe = lagrangian(samples_path, t_traj, problem_config)
+        total_cost, ke, pe = lagrangian(samples_path, t_traj, problem_config,key = subkey)
+         
         return total_cost, (ke, pe)
 
     # JIT compile loss+grad to avoid repeated retracing
