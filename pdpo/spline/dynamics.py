@@ -43,6 +43,7 @@ def gen_sample_trajectory(
     
     Args:
         spline_state: Spline state
+        vf: Neural network model (nnx.Module) representing the velocity field
         key: JAX random key
         x0: Optional initial samples (if None, samples from prior_dist)
         num_samples: Number of samples to generate

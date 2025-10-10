@@ -31,7 +31,7 @@ def optimize_path(
     problem_config: ProblemConfig,
     key: PRNGKeyArray,
     epochs: int,
-    learning_rate: float = 1e-3,
+    learning_rate: float = 0,
     t_node: int = 10,
     batch_size: int = 1000,
     x0: Optional[SampleArray] = None
@@ -99,7 +99,8 @@ def optimize_path(
         return total_cost, (ke, pe)
 
     # JIT compile loss+grad to avoid repeated retracing
-    loss_and_grad = jax.jit(jax.value_and_grad(loss_fn, has_aux=True))
+    # loss_and_grad = jax.jit(jax.value_and_grad(loss_fn, has_aux=True))
+    loss_and_grad = jax.value_and_grad(loss_fn, has_aux=True)
 
     # Per-step function for lax.scan
     def train_step(carry, step_key):

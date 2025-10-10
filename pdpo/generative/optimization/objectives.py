@@ -322,7 +322,7 @@ class StochasticInterpolantObjective(ObjectiveFunction):
         loss = jnp.mean(l2_error)
         
         metrics = {
-            "si_loss": loss,
+            "mse_loss": loss,
             "velocity_norm": jnp.mean(jnp.linalg.norm(v_pred, axis=1)),
             "target_velocity_norm": jnp.mean(jnp.linalg.norm(u_t, axis=1)),
             "interpolant_norm": jnp.mean(jnp.linalg.norm(x_t, axis=1)),

@@ -11,6 +11,7 @@ from flax import nnx
 
 from jaxtyping import Array, PyTree
 
+import matplotlib.pyplot as plt
 
 from pdpo.spline.interpolation import linear_interpolation_states, cubic_interp, linear_interp
 from pdpo.spline.types_interpolation import  ProblemConfig
@@ -56,6 +57,8 @@ def optimize_path_with_boundaries(
     """
     spline_state = problem_config.splinestate
     key_boundary, key_path = jrn.split(key)
+
+    
     
     # Create boundary matching methods
     arch_config = {
@@ -76,16 +79,23 @@ def optimize_path_with_boundaries(
     for iteration in range(alternating_iterations):
         iter_key = jrn.fold_in(key, iteration)
         key1, key2, key3 = jrn.split(iter_key, 3)
-        
+        # The path optimization routine works.
         # Step 1: Optimize path with fixed boundaries
         optimized_state, _, path_history = optimize_path(
             problem_config=problem_config,
             key=key1,
             epochs=path_epochs,
+            learning_rate=1e-3,
             **kwargs
         )
+        # Is this wrong? 
+        problem_config = replace(problem_config, splinestate=optimized_state)
         
-        # Step 2: Optimize boundaries with fixed path
+        theta0_current, theta1_current = optimized_state.boundary_params
+
+        # Update the methods to start from current boundaries
+        nnx.update(source_method.vf_model, theta0_current)
+        nnx.update(target_method.vf_model, theta1_current)
         
         batch_size = kwargs.get('batch_size', 1000)
         dim = spline_state.config.architecture[0]
@@ -94,29 +104,35 @@ def optimize_path_with_boundaries(
         source_samples = inf_train_gen(spline_state.config.data0, key2, batch_size, dim)
         target_samples = inf_train_gen(spline_state.config.data1, key3, batch_size, dim)
         reference_samples = inf_train_gen(spline_state.prior, key2, batch_size, dim)
+
         
-        # Update boundary parameters
+        # # Update boundary parameters
         updated_source_vf, updated_target_vf = update_boundary_parameters(
             source_method=source_method,
             target_method=target_method,
-            problem_config=problem_config._replace(splinestate=optimized_state),
+            problem_config=problem_config,
             key=key3,
             source_samples=source_samples,
             target_samples=target_samples,
             reference_samples=reference_samples,
             num_steps=boundary_epochs
         )
-        
+
+        # print("===========================================")
+        # print(f"Completed boundary optimization iteration {iteration+1}/{alternating_iterations}")
+        # print("===========================================")
         # Update problem config with new boundaries
         new_boundary_params = (
             nnx.state(updated_source_vf),
             nnx.state(updated_target_vf)
         )
-        optimized_state = optimized_state._replace(boundary_params=new_boundary_params)
-        problem_config = problem_config._replace(splinestate=optimized_state)
+        
+        optimized_state = replace(optimized_state, boundary_params=new_boundary_params)
+        problem_config = replace(problem_config, splinestate=optimized_state)
         
         # Record history
-        history['path_losses'].extend(path_history['lagrangian'])
+        history['path_losses'].extend(path_history.lagrangian)
+        # print(history,iteration)
         history['iterations'].append(iteration)
     
     return optimized_state, history

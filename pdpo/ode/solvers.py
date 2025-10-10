@@ -46,7 +46,6 @@ class EulerSolver(ODESolver):
 
     # @partial(jax.jit, static_argnums=(0,))
     def step(
-        self,
         f: Callable,
         t: float,
         x: SampleArray,
@@ -115,7 +114,7 @@ def eval_model(
 def sample_trajectory(
         vf: nnx.Module,
         x0: SampleArray,
-        ode_solver:ODESolver = MidpointSolver,
+        ode_solver:ODESolver = EulerSolver,
         n_steps: int = 10,
         backward: bool = False,
 ):

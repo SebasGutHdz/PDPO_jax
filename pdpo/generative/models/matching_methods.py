@@ -72,7 +72,7 @@ class FlowMatching(MatchingMethod):
         key: PRNGKeyArray,
         data_batch: SampleArray,
         reference_samples: Optional[SampleArray] = None,
-    ) -> Tuple[Float[Array, ""], Dict[str, Any]]:
+    ) -> Tuple[Float[Array, " "], Dict[str, Any]]:
         """
         Compute Flow Matching loss using existing objective.
         

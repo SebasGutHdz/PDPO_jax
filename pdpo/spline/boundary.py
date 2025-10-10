@@ -15,6 +15,8 @@ from pdpo.spline.dynamics import gen_sample_trajectory
 from pdpo.energy_model.lagrangian import lagrangian
 from pdpo.spline.types_interpolation import ProblemConfig
 
+from dataclasses import replace
+
 
 def update_boundary_parameters(
     source_method: MatchingMethod,
@@ -24,7 +26,7 @@ def update_boundary_parameters(
     source_samples: SampleArray,
     target_samples: SampleArray,
     reference_samples: SampleArray,
-    boundary_weights: Tuple[float, float] = (1.0, 1.0),
+    boundary_weights: Tuple[float, float] = (100.0, 100.0),
     action_weight: float = 0.1,
     num_steps: int = 10
 ) -> Tuple[nnx.Module, nnx.Module]:
@@ -54,16 +56,16 @@ def update_boundary_parameters(
         key1, key2, key3 = jrn.split(step_key, 3)
         
         # Compute source boundary loss
-        source_loss, _ = source_method.compute_loss(
-            model=source_vf,
+        source_loss, metrics_source = source_method.compute_loss(
+            vf_model=source_vf,
             key=key1,
             data_batch=source_samples,
             reference_samples=reference_samples
         )
         
         # Compute target boundary loss  
-        target_loss, _ = target_method.compute_loss(
-            model=target_vf,
+        target_loss, metrics_target = target_method.compute_loss(
+            vf_model=target_vf,
             key=key2,
             data_batch=target_samples,
             reference_samples=reference_samples
@@ -73,10 +75,11 @@ def update_boundary_parameters(
         action_penalty = _compute_action_penalty(
             source_vf, target_vf, problem_config, key3, reference_samples
         )
-        
+        # jax.debug.print("Source Loss: {:.4f}, Target Loss: {:.4f}, Action Penalty: {:.4f}", 
+        #         metrics_source['mse_loss'], metrics_target['mse_loss'], action_penalty)
         # Combined objective
         total_loss = alpha0 * source_loss + alpha1 * target_loss + action_weight * action_penalty
-
+        
         return total_loss, {
             'source_loss': source_loss,
             'target_loss': target_loss, 
@@ -87,8 +90,25 @@ def update_boundary_parameters(
     # Optimization loop
     keys = jrn.split(key, num_steps)
     
-    for step_key in keys:
-        # Compute gradients for both models
+    # for step_key in keys:
+    #     # Compute gradients for both models
+    #     grad_fn = nnx.value_and_grad(
+    #         lambda src, tgt: boundary_loss_fn(src, tgt, step_key),
+    #         argnums=(0, 1),
+    #         has_aux=True
+    #     )
+        
+    #     (loss, metrics), (source_grads, target_grads) = grad_fn(
+    #         source_method.vf_model, target_method.vf_model
+    #     )
+        
+    #     # Update parameters using method optimizers
+    #     source_method.optimizer.update(source_method.vf_model, source_grads)
+    #     target_method.optimizer.update(target_method.vf_model, target_grads)
+
+    keys = jrn.split(key, num_steps)
+    
+    for step_idx, step_key in enumerate(keys):
         grad_fn = nnx.value_and_grad(
             lambda src, tgt: boundary_loss_fn(src, tgt, step_key),
             argnums=(0, 1),
@@ -99,12 +119,55 @@ def update_boundary_parameters(
             source_method.vf_model, target_method.vf_model
         )
         
-        # Update parameters using method optimizers
+        # Store metrics
+        # history['total_loss'].append(float(loss))
+        # history['action_penalty'].append(float(metrics['action_penalty']))
+        
         source_method.optimizer.update(source_method.vf_model, source_grads)
         target_method.optimizer.update(target_method.vf_model, target_grads)
     
     return source_method.vf_model, target_method.vf_model
 
+
+# def _compute_action_penalty(
+#     source_vf: nnx.Module,
+#     target_vf: nnx.Module, 
+#     problem_config: ProblemConfig,
+#     key: PRNGKeyArray,
+#     reference_samples: SampleArray
+# ) -> float:
+#     # """Compute action penalty for current boundary parameters."""
+#     spline_state = problem_config.splinestate
+    
+#     # Update spline state with new boundary parameters
+#     updated_params = (
+#         nnx.state(source_vf),
+#         nnx.state(target_vf)
+#     )
+#     # temp_spline_state = spline_state._replace(boundary_params=updated_params)
+#     temp_spline_state = replace(spline_state, boundary_params=updated_params)
+    
+#     # Generate sample trajectory with updated boundaries
+#     t_traj = jnp.linspace(0, 1, problem_config.discretization_integral)
+    
+#     # Create temporary velocity field for trajectory generation
+#     temp_vf = source_vf  # Use source as template
+    
+#     samples_path = gen_sample_trajectory(
+#         spline_state=temp_spline_state,
+#         vf=temp_vf,
+#         key=key,
+#         x0=reference_samples,
+#         num_samples=reference_samples.shape[0],
+#         t_traj=t_traj,
+#         time_steps_node=10,
+#         solver=spline_state.config.solver
+#     )
+    
+#     # Compute action using lagrangian
+#     action_value, _, _ = lagrangian(samples_path, t_traj, problem_config, key=key)
+    
+#     return action_value
 
 def _compute_action_penalty(
     source_vf: nnx.Module,
@@ -114,25 +177,41 @@ def _compute_action_penalty(
     reference_samples: SampleArray
 ) -> float:
     """Compute action penalty for current boundary parameters."""
+    from dataclasses import replace
+    from pdpo.models.builder import create_model
+    from pdpo.energy_model.lagrangian import lagrangian
+    
     spline_state = problem_config.splinestate
     
-    # Update spline state with new boundary parameters
-    updated_params = (
-        nnx.state(source_vf),
-        nnx.state(target_vf)
+    # Extract parameter PyTrees from models
+    theta0 = nnx.state(source_vf)
+    theta1 = nnx.state(target_vf)
+    
+    # Update spline state with new boundaries
+    updated_spline_state = replace(
+        spline_state,
+        boundary_params=(theta0, theta1)
     )
-    temp_spline_state = spline_state._replace(boundary_params=updated_params)
     
-    # Generate sample trajectory with updated boundaries
+    updated_problem_config = replace(
+        problem_config,
+        splinestate=updated_spline_state
+    )
+    
+    # Create template model
+    key_model, key_traj = jrn.split(key)
+    arch = spline_state.config.architecture + [key_model]
+    template_vf = create_model(
+        type=spline_state.config.type_architecture,
+        args_arch=arch
+    )
+    
+    # Generate trajectory with updated boundaries
     t_traj = jnp.linspace(0, 1, problem_config.discretization_integral)
-    
-    # Create temporary velocity field for trajectory generation
-    temp_vf = source_vf  # Use source as template
-    
     samples_path = gen_sample_trajectory(
-        spline_state=temp_spline_state,
-        vf=temp_vf,
-        key=key,
+        spline_state=updated_spline_state,
+        vf=template_vf,
+        key=key_traj,
         x0=reference_samples,
         num_samples=reference_samples.shape[0],
         t_traj=t_traj,
@@ -140,8 +219,8 @@ def _compute_action_penalty(
         solver=spline_state.config.solver
     )
     
-    # Compute action using lagrangian
-    action_value, _, _ = lagrangian(samples_path, t_traj, problem_config, key=key)
+    # Compute action
+    action_value, _, _ = lagrangian(samples_path, t_traj, updated_problem_config, key=key_traj)
     
     return action_value
 
@@ -168,21 +247,22 @@ def create_boundary_methods(
     """
     from pdpo.generative.models.matching_methods import FlowMatching, StochasticInterpolant
     from pdpo.models.builder import create_model
-    from pdpo.ode.solvers import MidpointSolver
+    from pdpo.ode.solvers import MidpointSolver,EulerSolver
     import optax
     
     key1, key2 = jrn.split(key)
     
-    # Create models
-    source_vf = create_model(**architecture_config, key=key1)
-    target_vf = create_model(**architecture_config, key=key2)
+    # Create models. Input type: str, args_arch: input_size,num_layers,layer_width,activation,time_varying,key
+    
+    source_vf = create_model(architecture_config['type'], architecture_config['args_arch'])
+    target_vf = create_model(architecture_config['type'], architecture_config['args_arch'])
     
     # Create optimizers
-    source_optimizer = nnx.Optimizer(source_vf, optax.adam(1e-3))
-    target_optimizer = nnx.Optimizer(target_vf, optax.adam(1e-3))
+    source_optimizer = nnx.Optimizer(source_vf, optax.adam(1e-3), wrt = nnx.Param) # This has to be passed as an argument
+    target_optimizer = nnx.Optimizer(target_vf, optax.adam(1e-3), wrt = nnx.Param) # This has to be passed as an argument
     
     # Create ODE solver
-    ode_solver = MidpointSolver()
+    ode_solver = EulerSolver()
     
     if method_type == 'FM':
         source_method = FlowMatching(
