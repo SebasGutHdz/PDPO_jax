@@ -28,14 +28,15 @@ def update_boundary_parameters(
     reference_samples: SampleArray,
     boundary_weights: Tuple[float, float] = (100.0, 100.0),
     action_weight: float = 0.1,
-    num_steps: int = 10
+    num_steps: int = 10,
+    use_adjoint: bool = False
 ) -> Tuple[nnx.Module, nnx.Module]:
     """
     Update boundary parameters θ₀, θ₁ using matching method losses and action penalty.
-    
+
     Args:
         source_method: MatchingMethod for source boundary (θ₀)
-        target_method: MatchingMethod for target boundary (θ₁)  
+        target_method: MatchingMethod for target boundary (θ₁)
         problem_config: Problem configuration containing spline state
         key: JAX random key
         source_samples: Ground truth source distribution samples
@@ -44,7 +45,8 @@ def update_boundary_parameters(
         boundary_weights: Weights (α₀, α₁) for boundary losses
         action_weight: Weight for action penalty term
         num_steps: Number of optimization steps
-        
+        use_adjoint: If True, use adjoint method for memory-efficient gradients
+
     Returns:
         Updated source and target velocity field models
     """
@@ -73,7 +75,7 @@ def update_boundary_parameters(
         
         # Compute action penalty
         action_penalty = _compute_action_penalty(
-            source_vf, target_vf, problem_config, key3, reference_samples
+            source_vf, target_vf, problem_config, key3, reference_samples, use_adjoint
         )
         # jax.debug.print("Source Loss: {:.4f}, Target Loss: {:.4f}, Action Penalty: {:.4f}", 
         #         metrics_source['mse_loss'], metrics_target['mse_loss'], action_penalty)
@@ -171,33 +173,47 @@ def update_boundary_parameters(
 
 def _compute_action_penalty(
     source_vf: nnx.Module,
-    target_vf: nnx.Module, 
+    target_vf: nnx.Module,
     problem_config: ProblemConfig,
     key: PRNGKeyArray,
-    reference_samples: SampleArray
+    reference_samples: SampleArray,
+    use_adjoint: bool = False
 ) -> float:
-    """Compute action penalty for current boundary parameters."""
+    """
+    Compute action penalty for current boundary parameters.
+
+    Args:
+        source_vf: Source velocity field model
+        target_vf: Target velocity field model
+        problem_config: Problem configuration
+        key: JAX random key
+        reference_samples: Reference samples for trajectory generation
+        use_adjoint: If True, use adjoint method for memory-efficient gradients
+
+    Returns:
+        Action value (scalar)
+    """
     from dataclasses import replace
     from pdpo.models.builder import create_model
     from pdpo.energy_model.lagrangian import lagrangian
-    
+
     spline_state = problem_config.splinestate
-    
+
     # Extract parameter PyTrees from models
     theta0 = nnx.state(source_vf)
     theta1 = nnx.state(target_vf)
-    
+
     # Update spline state with new boundaries
     updated_spline_state = replace(
         spline_state,
         boundary_params=(theta0, theta1)
     )
-    
+
     updated_problem_config = replace(
         problem_config,
         splinestate=updated_spline_state
     )
-    
+
     # Create template model
     key_model, key_traj = jrn.split(key)
     arch = spline_state.config.architecture + [key_model]
@@ -205,8 +221,8 @@ def _compute_action_penalty(
         type=spline_state.config.type_architecture,
         args_arch=arch
     )
-    
-    # Generate trajectory with updated boundaries
+
+    # Generate trajectory with updated boundaries (with optional adjoint method)
     t_traj = jnp.linspace(0, 1, problem_config.discretization_integral)
     samples_path = gen_sample_trajectory(
         spline_state=updated_spline_state,
@@ -216,12 +232,13 @@ def _compute_action_penalty(
         num_samples=reference_samples.shape[0],
         t_traj=t_traj,
         time_steps_node=10,
-        solver=spline_state.config.solver
+        solver=spline_state.config.solver,
+        use_adjoint=use_adjoint
     )
-    
+
     # Compute action
     action_value, _, _ = lagrangian(samples_path, t_traj, updated_problem_config, key=key_traj)
-    
+
     return action_value
 
 

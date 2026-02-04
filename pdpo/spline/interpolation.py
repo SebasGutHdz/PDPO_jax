@@ -63,70 +63,81 @@ def linear_interp(
 
 def cubic_interp(
     t: Float[Array, "T"],        # Control point times
-    xt: List[PyTree],                  # Control point parameters (PyTree) 
+    xt: List[PyTree],                  # Control point parameters (PyTree)
     s: Float[Array, "S"]         # Query times
 ) -> PyTree:                     # Interpolated parameters (same PyTree structure)
     """
     Cubic Hermite interpolation of PyTree parameters over time.
-    
+
     Args:
         t: Time points at control points, shape (T,)
         xt: PyTree with leaves representing parameters at control points
         s: Query time points, shape (S,)
-        
+
     Returns:
         PyTree with same structure as xt, interpolated at query times s
     """
-    def compute_derivatives(x, t):
-        dt = jnp.diff(t)
+    T = len(xt)
 
-        def get_dx(i):
-            if i == 0:
-                return jax.tree.map(lambda a, b: (b - a) / dt[0], x[0], x[1])
-            elif i == len(x) - 1:
-                return jax.tree.map(lambda a, b: (a - b) / dt[-1], x[-1], x[-2])
-            else:
-                h = t[i + 1] - t[i - 1]
-                return jax.tree.map(lambda a, b: (b - a) / h, x[i + 1], x[i - 1])
+    # Stack PyTree list into batched PyTree with leading time axis
+    x_vals = jax.tree.map(lambda *args: jnp.stack(args), *xt)  # [T, ...]
 
-        return [ (x[i], get_dx(i)) for i in range(len(x)) ]
+    # Compute finite differences: fd[i] = (x[i+1] - x[i]) / (t[i+1] - t[i])
+    dt = jnp.diff(t)  # [T-1]
 
-    # Step 1: Compute derivatives
-    xt = compute_derivatives(xt, t)
+    def compute_fd(x_arr):
+        # x_arr has shape [T, ...]
+        return (x_arr[1:] - x_arr[:-1]) / (dt.reshape((-1,) + (1,) * (x_arr.ndim - 1)) + 1e-10)
 
-    # Step 2: Convert list of tuples to tuple of PyTrees with leading time axis
-    x_vals, dx_vals = zip(*xt)  # unzip
-    x_vals = jax.tree.map(lambda *args: jnp.stack(args), *x_vals)    # [T, ...]
-    dx_vals = jax.tree.map(lambda *args: jnp.stack(args), *dx_vals)  # [T, ...]
+    fd = jax.tree.map(compute_fd, x_vals)  # [T-1, ...]
 
-    # Step 3: Interpolation function (for one s)
+    # Compute tangents m using average of adjacent finite differences
+    def compute_tangents(fd_arr):
+        # fd_arr has shape [T-1, ...]
+        # Interior points: average of adjacent finite differences
+        m_interior = (fd_arr[1:] + fd_arr[:-1]) / 2  # [T-2, ...]
+        # Left endpoint: use first finite difference
+        m_left = fd_arr[0:1]  # [1, ...]
+        # Right endpoint: use last finite difference
+        m_right = fd_arr[-1:]  # [1, ...]
+        return jnp.concatenate([m_left, m_interior, m_right], axis=0)  # [T, ...]
+
+    m_vals = jax.tree.map(compute_tangents, fd)  # [T, ...]
+
+    # Interpolation function (for one s)
     def interpolate_single_time(sj):
-        idx = jnp.searchsorted(t, sj, side="right") - 1
-        idx = jnp.clip(idx, 0, t.shape[0] - 2)
+        idx = jnp.searchsorted(t[1:], sj, side="left")
+        idx = jnp.clip(idx, 0, T - 2)
+        right_idx = (idx + 1) % T
 
-        t0, t1 = t[idx], t[idx + 1]
-        dt = t1 - t0
-        tau = (sj - t0) / dt
+        t0, t1 = t[idx], t[right_idx]
+        dx = t1 - t0 + 1e-10
+        tau = (sj - t0) / dx
 
+        def index(pytree, i):
+            return jax.tree.map(lambda arr: jax.lax.dynamic_index_in_dim(arr, i, axis=0, keepdims=False), pytree)
+
+        p0 = index(x_vals, idx)
+        p1 = index(x_vals, right_idx)
+        m0 = index(m_vals, idx)
+        m1 = index(m_vals, right_idx)
+
+        # Standard Hermite basis functions
         h00 = 2 * tau**3 - 3 * tau**2 + 1
         h10 = tau**3 - 2 * tau**2 + tau
         h01 = -2 * tau**3 + 3 * tau**2
         h11 = tau**3 - tau**2
 
-        def index(pytree, i):
-            return jax.tree.map(lambda arr: jax.lax.dynamic_index_in_dim(arr, i, axis=0, keepdims=False), pytree)
-
-        x0 = index(x_vals, idx)
-        x1 = index(x_vals, idx + 1)
-        dx0 = index(dx_vals, idx)
-        dx1 = index(dx_vals, idx + 1)
-
+        # Hermite interpolation: p(τ) = h00*p0 + h10*dt*m0 + h01*p1 + h11*dt*m1
+        # m0, m1 are velocities (dp/dt), so we scale by dt to get tangent vectors
         return jax.tree.map(
-            lambda a, b, c, d: h00 * a + h10 * dt * b + h01 * c + h11 * dt * d,
-            x0, dx0, x1, dx1
+            lambda p0_, p1_, m0_, m1_: (
+                h00 * p0_ + h10 * dx * m0_ + h01 * p1_ + h11 * dx * m1_
+            ),
+            p0, p1, m0, m1
         )
 
-    # Step 4: Vectorize over s
+    # Vectorize over s
     return jax.vmap(interpolate_single_time)(s)
 
 def unstack_pytree(batched_tree):

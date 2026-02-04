@@ -34,11 +34,26 @@ def optimize_path(
     learning_rate: float = 0,
     t_node: int = 10,
     batch_size: int = 1000,
-    x0: Optional[SampleArray] = None
+    x0: Optional[SampleArray] = None,
+    use_adjoint: bool = False
 ) -> Tuple[SplineState, OptimizationHistory]:
     """
     Optimizes the interior points of the spline path while keeping endpoints fixed.
     This version uses jax.jit + jax.lax.scan to run the training loop inside XLA.
+
+    Args:
+        problem_config: Problem configuration
+        key: JAX random key
+        epochs: Number of optimization epochs
+        learning_rate: Learning rate for Adam optimizer
+        t_node: Number of ODE integration steps
+        batch_size: Number of samples per batch
+        x0: Optional initial samples
+        use_adjoint: If True, use adjoint method for memory-efficient gradients
+                    (recommended for t_node > 100)
+
+    Returns:
+        Tuple of (optimized_state, final_opt_state, history)
     """
 
     spline_state = problem_config.splinestate
@@ -76,13 +91,13 @@ def optimize_path(
     # Pre-split keys for each epoch to avoid splitting inside scan (stable trace)
     keys = jrn.split(key, epochs + 1)[1:]  # length == epochs
 
-    
+
     def loss_fn(control_points, step_key):
         """Given control points and a PRNG key, produce scalar loss and aux (ke, pe)."""
         # Replace control points in a copy of the spline state
         temp_state = replace(spline_state, control_points=control_points)
 
-        # Generate sample trajectory 
+        # Generate sample trajectory with optional adjoint method
         samples_path = gen_sample_trajectory(
             temp_state,
             vf,
@@ -91,14 +106,16 @@ def optimize_path(
             num_samples=batch_size,
             t_traj=t_traj,
             time_steps_node=t_node,
-            solver=spline_state.config.solver
+            solver=spline_state.config.solver,
+            use_adjoint=use_adjoint
         )
 
         total_cost, ke, pe = lagrangian(samples_path, t_traj, problem_config,key = subkey)
-         
+
         return total_cost, (ke, pe)
 
     # JIT compile loss+grad to avoid repeated retracing
+    # NOTE: Outer JIT disabled because it causes very slow tracing with Python loops in gen_sample_trajectory
     # loss_and_grad = jax.jit(jax.value_and_grad(loss_fn, has_aux=True))
     loss_and_grad = jax.value_and_grad(loss_fn, has_aux=True)
 
@@ -174,20 +191,23 @@ def geodesic_warmup(
     epochs: int = 100,
     learning_rate: float = 1e-3,
     batch_size: int = 1000,
-    x0: Optional[SampleArray] = None
+    x0: Optional[SampleArray] = None,
+    use_adjoint: bool = False
 ) -> SplineState:
     """
     Initializes control points by optimizing for geodesic path in Wasserstein space.
-    
+
     Args:
-        spline_state: Initial spline state
+        problem_config: Problem configuration
         key: JAX random key
-        num_epochs: Number of warmup iterations
+        epochs: Number of warmup iterations
         learning_rate: Learning rate for warmup
         batch_size: Batch size for sampling
-        
+        x0: Optional initial samples
+        use_adjoint: If True, use adjoint method for memory-efficient gradients
+
     Returns:
-        Warmed-up spline state
+        Warmed-up spline state and history
     """
     # Call of optimize path with spline_state being the zero potential 
     # Replace problem_configsL potential function, entropy, fisher and ke_modifier
@@ -207,7 +227,8 @@ def geodesic_warmup(
         epochs=epochs,
         learning_rate=learning_rate,
         batch_size=batch_size,
-        x0=x0
+        x0=x0,
+        use_adjoint=use_adjoint
     )
 
     return optimized_state, history

@@ -59,6 +59,6 @@ def kinetic_energy(
     
     # Compute kinetic energy
     ke = jnp.linalg.norm(m, ord=p, axis=-1) ** p
-    ke = jnp.mean(ke, axis=0)  # Mean over samples at each time step
+    ke = jnp.mean(ke, axis=0)/p  # Mean over samples at each time step
     
     return ke

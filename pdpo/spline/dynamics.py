@@ -1,6 +1,7 @@
 
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Callable, NamedTuple
+from functools import partial
 import jax
 import jax.numpy as jnp
 import jax.random as jrn
@@ -35,12 +36,13 @@ def gen_sample_trajectory(
     num_samples: int = 1000,
     t_traj: Optional[TimeStepsArray] = None,
     time_steps_node: int = 10,
-    solver: ODESolver = MidpointSolver
+    solver: ODESolver = MidpointSolver,
+    use_adjoint: bool = False
 ) -> TrajectoryArray:
     """
     Generates samples along the interpolated path by pushing forward samples
     through the sequence of transport maps.
-    
+
     Args:
         spline_state: Spline state
         vf: Neural network model (nnx.Module) representing the velocity field
@@ -50,10 +52,11 @@ def gen_sample_trajectory(
         t_traj: Time points to evaluate samples at
         time_steps_node: Number of integration steps for NODE solver
         solver: ODE solver type ('euler' or 'midpoint')
-        
+        use_adjoint: If True, use adjoint method for memory-efficient gradients
+
     Returns:
         samples_path: Shape (num_samples, time_steps, dim)
-        
+
     Note: Placeholders for entropy and Fisher information are included but not implemented.
     """
     dim = spline_state.config.architecture[0]
@@ -77,12 +80,12 @@ def gen_sample_trajectory(
     
     # Get interpolated parameters at trajectory times
     theta_t_list = interp(spline_state, t_traj)
+
     # Initialize output array
     samples_path = jnp.zeros((num_samples, time_steps_traj, dim))
-    
+
     # Placeholder for entropy/Fisher information
     # In future: augment z with log_density and/or score
-    
 
     # Generate trajectory by pushing forward through each time step
     for i in range(time_steps_traj):
@@ -93,11 +96,12 @@ def gen_sample_trajectory(
             vf=vf,
             z=z.copy(),
             t_node=time_steps_node,
-            solver=solver
+            solver=solver,
+            use_adjoint=use_adjoint
         )
-        
+
         samples_path = samples_path.at[:, i, :].set(samples_i)
-    
+
     return samples_path
 
 # =============================================================================
@@ -108,30 +112,60 @@ def pushforward(
     vf: nnx.Module,
     z: SampleArray,
     t_node: int = 10,
-    solver: ODESolver = MidpointSolver
+    solver: ODESolver = MidpointSolver,
+    use_adjoint: bool = False
 ) -> SampleArray:
     """
     Pushes samples forward through a neural ODE with given parameters.
-    
+
+    JIT compiled with inline=True to avoid nested compilation issues.
+
     Args:
         vf: nnx.Module representing the velocity field
         z: (batch_size, dim) tensor of input samples
         t_node: Number of integration steps
-        solver: ODE solver type
-        
+        solver: ODE solver type (marked as static for JIT)
+        use_adjoint: If True, use adjoint method for memory-efficient gradients
+
     Returns:
         Transformed samples after flowing through the ODE
+
+    Note:
+        When use_adjoint=True, gradient computation uses O(1) memory w.r.t. t_node
+        instead of O(t_node) memory with standard autodiff. Use for long integrations.
     """
-    
-    
-        
-    # Integrate forward
-    x = sample_trajectory(
-        vf=vf,
-        x0=z,
-        ode_solver=solver,
-        n_steps=t_node
-    )
+    if use_adjoint:
+        # Use adjoint method for memory-efficient gradients
+        from pdpo.ode.adjoint import odeint_adjoint
+        from pdpo.ode.solvers import eval_model
+
+        # Convert solver to string for adjoint method
+        solver_name = solver.__class__.__name__.replace('Solver', '').lower()
+
+        # Define dynamics function compatible with adjoint method
+        def dynamics_fn(t, y, params):
+            # Reconstruct model from params
+            graphdef, _ = nnx.split(vf)
+            model = nnx.merge(graphdef, params)
+            return eval_model(model, t, y, time_dependent=model.time_varying)
+
+        # Extract parameters
+        _, params = nnx.split(vf)
+
+        # Time span
+        t_span = jnp.linspace(0.0, 1.0, t_node)
+
+        # Solve with adjoint method
+        x = odeint_adjoint(dynamics_fn, z, t_span, params,
+                          solver=solver_name, dt0=1.0/(t_node-1))
+    else:
+        # Standard integration with autodiff
+        x = sample_trajectory(
+            vf=vf,
+            x0=z,
+            ode_solver=solver,
+            n_steps=t_node
+        )
     return x
 
 
@@ -139,29 +173,60 @@ def pull_back(
     model: nnx.Module,
     x: SampleArray,
     t_node: int = 10,
-    solver: ODESolver = MidpointSolver
+    solver: ODESolver = MidpointSolver,
+    use_adjoint: bool = False
 ) -> SampleArray:
     """
     Pulls samples backward through a neural ODE with given parameters.
-    
+
+    JIT compiled with inline=True to avoid nested compilation issues.
+
     Args:
         model: nnx.Module representing the velocity field
         x: (batch_size, dim) tensor of input samples
         t_node: Number of integration steps
-        solver: ODE solver type
-        
+        solver: ODE solver type (marked as static for JIT)
+        use_adjoint: If True, use adjoint method for memory-efficient gradients
+
     Returns:
         Original samples obtained by running ODE backward
+
+    Note:
+        When use_adjoint=True, gradient computation uses O(1) memory w.r.t. t_node
+        instead of O(t_node) memory with standard autodiff. Use for long integrations.
     """
-        
-  
-    # Integrate backward
-    z  = sample_trajectory(
-        vf=model,
-        x0=x,
-        ode_solver=solver,
-        n_steps=t_node,
-        backward=True
-    )
-    
+    if use_adjoint:
+        # Use adjoint method for memory-efficient gradients
+        from pdpo.ode.adjoint import odeint_adjoint
+        from pdpo.ode.solvers import eval_model
+
+        # Convert solver to string for adjoint method
+        solver_name = solver.__class__.__name__.replace('Solver', '').lower()
+
+        # Define dynamics function compatible with adjoint method
+        def dynamics_fn(t, y, params):
+            # Reconstruct model from params
+            graphdef, _ = nnx.split(model)
+            model_recon = nnx.merge(graphdef, params)
+            return eval_model(model_recon, t, y, time_dependent=model_recon.time_varying)
+
+        # Extract parameters
+        _, params = nnx.split(model)
+
+        # Time span (reversed for backward integration)
+        t_span = jnp.linspace(1.0, 0.0, t_node)
+
+        # Solve with adjoint method
+        z = odeint_adjoint(dynamics_fn, x, t_span, params,
+                          solver=solver_name, dt0=1.0/(t_node-1))
+    else:
+        # Standard backward integration with autodiff
+        z = sample_trajectory(
+            vf=model,
+            x0=x,
+            ode_solver=solver,
+            n_steps=t_node,
+            backward=True
+        )
+
     return z

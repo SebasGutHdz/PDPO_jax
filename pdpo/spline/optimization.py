@@ -38,6 +38,7 @@ def optimize_path_with_boundaries(
     key: PRNGKeyArray,
     path_epochs: int = 100,
     boundary_epochs: int = 20,
+    batch_size: int = 1000,
     alternating_iterations: int = 5,
     **kwargs
 ) -> Tuple[SplineState, dict]:
@@ -85,10 +86,11 @@ def optimize_path_with_boundaries(
             problem_config=problem_config,
             key=key1,
             epochs=path_epochs,
+            batch_size=batch_size,
             learning_rate=1e-3,
             **kwargs
         )
-        # Is this wrong? 
+
         problem_config = replace(problem_config, splinestate=optimized_state)
         
         theta0_current, theta1_current = optimized_state.boundary_params
@@ -97,16 +99,17 @@ def optimize_path_with_boundaries(
         nnx.update(source_method.vf_model, theta0_current)
         nnx.update(target_method.vf_model, theta1_current)
         
-        batch_size = kwargs.get('batch_size', 1000)
+        batch_size_bds = kwargs.get('batch_size', 1000)
         dim = spline_state.config.architecture[0]
         
         # Sample boundary data
-        source_samples = inf_train_gen(spline_state.config.data0, key2, batch_size, dim)
-        target_samples = inf_train_gen(spline_state.config.data1, key3, batch_size, dim)
-        reference_samples = inf_train_gen(spline_state.prior, key2, batch_size, dim)
+        source_samples = inf_train_gen(spline_state.config.data0, key2, batch_size_bds, dim)
+        target_samples = inf_train_gen(spline_state.config.data1, key3, batch_size_bds, dim)
+        reference_samples = inf_train_gen(spline_state.prior, key2, batch_size_bds, dim)
 
         
         # # Update boundary parameters
+        use_adjoint = kwargs.get('use_adjoint', False)
         updated_source_vf, updated_target_vf = update_boundary_parameters(
             source_method=source_method,
             target_method=target_method,
@@ -115,12 +118,13 @@ def optimize_path_with_boundaries(
             source_samples=source_samples,
             target_samples=target_samples,
             reference_samples=reference_samples,
-            num_steps=boundary_epochs
+            num_steps=boundary_epochs,
+            use_adjoint=use_adjoint
         )
 
-        # print("===========================================")
-        # print(f"Completed boundary optimization iteration {iteration+1}/{alternating_iterations}")
-        # print("===========================================")
+        print("===========================================")
+        print(f"Completed boundary optimization iteration {iteration+1}/{alternating_iterations}")
+        print("===========================================")
         # Update problem config with new boundaries
         new_boundary_params = (
             nnx.state(updated_source_vf),
